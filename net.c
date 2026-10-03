@@ -299,6 +299,182 @@ static void __attribute__((constructor)) net_connect_use(void) {
 #endif
 }
 
+// Net.connect_via
+// ---------------
+
+// A connection through a SOCKS5 proxy (RFC 1928), with user and password
+// when given (RFC 1929). The target goes as a host name, so the proxy
+// resolves it: no DNS query leaves this host for it.
+typedef struct {
+  char*    phost;
+  unsigned pport;
+  char*    user;
+  char*    pass;
+  char*    host;
+  unsigned port;
+} NetVia;
+
+static int net_all(int fd, void* buf, size_t n, int out) {
+  size_t done = 0;
+  while (done < n) {
+    ssize_t r = out ? send(fd, (char*)buf + done, n - done, MSG_NOSIGNAL)
+      : recv(fd, (char*)buf + done, n - done, 0);
+    if (r <= 0) {
+      return -1;
+    }
+    done += (size_t)r;
+  }
+  return 0;
+}
+
+static const char* net_socks_why(int rep) {
+  switch (rep) {
+    case 1: return "socks5: general failure";
+    case 2: return "socks5: connection not allowed by the proxy's rules";
+    case 3: return "socks5: network unreachable";
+    case 4: return "socks5: host unreachable";
+    case 5: return "socks5: connection refused";
+    case 6: return "socks5: TTL expired";
+    case 7: return "socks5: command not supported";
+    case 8: return "socks5: address type not supported";
+    default: return "socks5: the proxy failed the request";
+  }
+}
+
+// The SOCKS5 talk on a connected, blocking socket; NULL when it is
+// through, else why not.
+static const char* net_socks(int fd, NetVia* v) {
+  size_t ul = strlen(v->user), pl = strlen(v->pass), hl = strlen(v->host);
+  if (ul > 255 || pl > 255 || hl > 255 || hl == 0) {
+    return "socks5: a name is too long (255 bytes at most)";
+  }
+  unsigned char b[600];
+  int auth = ul > 0;
+  b[0] = 5;
+  b[1] = auth ? 2 : 1;
+  b[2] = 0;
+  b[3] = 2;
+  if (net_all(fd, b, auth ? 4 : 3, 1) || net_all(fd, b, 2, 0)) {
+    return "socks5: the proxy closed the connection";
+  }
+  if (b[0] != 5 || (b[1] != 0 && !(b[1] == 2 && auth))) {
+    return "socks5: the proxy accepts none of our authentication methods";
+  }
+  if (b[1] == 2) {
+    size_t n = 0;
+    b[n++] = 1;
+    b[n++] = (unsigned char)ul;
+    memcpy(b + n, v->user, ul);
+    n += ul;
+    b[n++] = (unsigned char)pl;
+    memcpy(b + n, v->pass, pl);
+    n += pl;
+    if (net_all(fd, b, n, 1) || net_all(fd, b, 2, 0)) {
+      return "socks5: the proxy closed the connection";
+    }
+    if (b[1] != 0) {
+      return "socks5: the proxy refused the user and password";
+    }
+  }
+  size_t n = 0;
+  b[n++] = 5;
+  b[n++] = 1;
+  b[n++] = 0;
+  b[n++] = 3;
+  b[n++] = (unsigned char)hl;
+  memcpy(b + n, v->host, hl);
+  n += hl;
+  b[n++] = (unsigned char)(v->port >> 8);
+  b[n++] = (unsigned char)(v->port & 255);
+  if (net_all(fd, b, n, 1) || net_all(fd, b, 4, 0)) {
+    return "socks5: the proxy closed the connection";
+  }
+  if (b[0] != 5 || b[1] != 0) {
+    return net_socks_why(b[1]);
+  }
+  size_t rest = b[3] == 1 ? 6 : b[3] == 4 ? 18 : 0;
+  if (b[3] == 3) {
+    if (net_all(fd, b, 1, 0)) {
+      return "socks5: the proxy closed the connection";
+    }
+    rest = (size_t)b[0] + 2;
+  }
+  if (rest == 0 || net_all(fd, b, rest, 0)) {
+    return "socks5: a malformed reply from the proxy";
+  }
+  return NULL;
+}
+
+static void net_via_call(IoWork* w) {
+  NetVia* v = (NetVia*)w->data;
+  char* keep = w->data;
+  w->data = v->phost;
+  w->word = v->pport;
+  net_connect_call(w);
+  w->data = keep;
+  if (w->made < 0) {
+    return;
+  }
+  int fd = (int)w->made;
+  struct timeval tv = { NET_CONNECT_MS / 1000, 0 };
+  int fl = fcntl(fd, F_GETFL);
+  fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  const char* why = net_socks(fd, v);
+  if (why != NULL) {
+    close(fd);
+    w->made = -1;
+    w->code = 0;
+    w->text = (char*)why;
+    return;
+  }
+  struct timeval none = { 0, 0 };
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof(none));
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &none, sizeof(none));
+  fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static Term net_via_pack(Env e, IoWork* w) {
+  NetVia* v = (NetVia*)w->data;
+  free(v->phost);
+  free(v->user);
+  free(v->pass);
+  free(v->host);
+  free(v);
+  if (w->made < 0) {
+    return io_fail(e, w->code, w->text);
+  }
+  return io_done(e, io_hand(w->made));
+}
+
+// Net.connect_via(proxy, pport, user, pass, host, port).
+Term net_connect_via_run(Env e, Term* f, IoWork* w) {
+  u64 n = 0;
+  NetVia* v = io_mem(malloc(sizeof(NetVia)));
+  v->phost = io_cstr(e, f[0], &n);
+  v->pport = (u32)f[1];
+  v->user  = io_cstr(e, f[2], &n);
+  v->pass  = io_cstr(e, f[3], &n);
+  v->host  = io_cstr(e, f[4], &n);
+  v->port  = (u32)f[5];
+  w->data = (char*)v;
+  w->code = 0;
+  w->text = NULL;
+  if (v->pport > 65535 || v->port > 65535) {
+    w->made = -1;
+    w->code = EINVAL;
+    return net_via_pack(e, w);
+  }
+  return io_work(w, net_via_call, net_via_pack);
+}
+
+static void __attribute__((constructor)) net_connect_via_use(void) {
+#ifdef CID_NET_CONNECT_VIA
+  io_eff(CID_NET_CONNECT_VIA, net_connect_via_run, 0);
+#endif
+}
+
 // Net.tls
 // -------
 
@@ -338,15 +514,18 @@ static Term net_tls_more(Env e, IoWork* w) {
   return net_tls_fail(e, w, net_why(t->ssl, "tls"));
 }
 
-// Net.tls(sock, host, cafile): a verified TLS 1.2+ session on the socket,
-// for host (its name or IP must be on the certificate); cafile "" trusts
-// the system's store.
+// Net.tls(sock, host, cafile, cert, key): a verified TLS 1.2+ session on
+// the socket, for host (its name or IP must be on the certificate);
+// cafile "" trusts the system's store; cert and key (PEM files, "" for
+// none) are this side's certificate, for servers that ask for one.
 Term net_tls_run(Env e, Term* f, IoWork* w) {
   w->hand = (intptr_t)io_hand_v(f[0]);
   int   fd = (int)w->hand;
-  u64   hn = 0, cn = 0;
+  u64   hn = 0, cn = 0, tn = 0, kn = 0;
   char* host = io_cstr(e, f[1], &hn);
   char* ca   = io_cstr(e, f[2], &cn);
+  char* cert = io_cstr(e, f[3], &tn);
+  char* key  = io_cstr(e, f[4], &kn);
   const char* bad = NULL;
   if (!net_load()) {
     bad = "tls: libssl (OpenSSL 1.1 or 3) was not found";
@@ -358,6 +537,8 @@ Term net_tls_run(Env e, Term* f, IoWork* w) {
   if (bad != NULL) {
     free(host);
     free(ca);
+    free(cert);
+    free(key);
     return net_tls_end(e, w, io_fail(e, 0, bad));
   }
   net_ssl.err_clear();
@@ -367,6 +548,14 @@ Term net_tls_run(Env e, Term* f, IoWork* w) {
   ok = ok && net_ssl.ctx_ctrl(ctx, NET_SET_MIN_PROTO, NET_TLS1_2, NULL) == 1;
   ok = ok && (cn > 0 ? net_ssl.ctx_load_locations(ctx, ca, NULL)
     : net_ssl.ctx_default_paths(ctx)) == 1;
+  if (ok && tn > 0) {
+    ok = !io_nul(cert, tn) && !io_nul(key, kn)
+      && net_ssl.ctx_use_chain(ctx, cert) == 1
+      && net_ssl.ctx_use_key(ctx, key, NET_FILETYPE_PEM) == 1
+      && net_ssl.ctx_check_key(ctx) == 1;
+  }
+  free(cert);
+  free(key);
   if (ok) {
     net_ssl.ctx_set_verify(ctx, NET_VERIFY_PEER, NULL);
     ssl = net_ssl.ssl_new(ctx);
@@ -683,5 +872,192 @@ Term net_debug_run(Env e, Term* f, IoWork* w) {
 static void __attribute__((constructor)) net_debug_use(void) {
 #ifdef CID_NET_DEBUG
   io_eff(CID_NET_DEBUG, net_debug_run, 0);
+#endif
+}
+
+// Dkim
+// ----
+//
+// SHA-256 and the signature for DKIM (RFC 6376, RFC 8463), from the same
+// OpenSSL the TLS side opens. The key is a PEM private key: RSA signs
+// with rsa-sha256, Ed25519 with ed25519-sha256 (the signature is over
+// the SHA-256 of the data, RFC 8463 3).
+
+typedef struct {
+  int   tried;
+  int   ok;
+  unsigned char* (*sha256)(const unsigned char*, size_t, unsigned char*);
+  void* (*read_key)(FILE*, void**, void*, void*);
+  void  (*key_free)(void*);
+  int   (*key_id)(const void*);
+  void* (*md_new)(void);
+  void  (*md_free)(void*);
+  const void* (*md_sha256)(void);
+  int   (*sign_init)(void*, void**, const void*, void*, void*);
+  int   (*sign)(void*, unsigned char*, size_t*, const unsigned char*, size_t);
+} NetKey;
+
+static NetKey net_key;
+
+#define NET_KEY_RSA     6
+#define NET_KEY_ED25519 1087
+
+static int net_key_load(void) {
+  if (net_key.tried) {
+    return net_key.ok;
+  }
+  net_key.tried = 1;
+  if (!net_load()) {
+    return 0;
+  }
+  int ok = 1;
+  net_key.sha256    = net_sym("SHA256", &ok);
+  net_key.read_key  = net_sym("PEM_read_PrivateKey", &ok);
+  net_key.key_free  = net_sym("EVP_PKEY_free", &ok);
+  net_key.md_new    = net_sym("EVP_MD_CTX_new", &ok);
+  net_key.md_free   = net_sym("EVP_MD_CTX_free", &ok);
+  net_key.md_sha256 = net_sym("EVP_sha256", &ok);
+  net_key.sign_init = net_sym("EVP_DigestSignInit", &ok);
+  net_key.sign      = net_sym("EVP_DigestSign", &ok);
+  net_key.key_id    = dlsym(net_ssl.lib, "EVP_PKEY_get_base_id");
+  if (net_key.key_id == NULL) {
+    net_key.key_id = dlsym(net_ssl.lib, "EVP_PKEY_base_id");
+  }
+  net_key.ok = ok && net_key.key_id != NULL;
+  return net_key.ok;
+}
+
+static Term net_b64(Env e, const unsigned char* p, size_t n) {
+  static const char* abc =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  char* out = io_mem(malloc(4 * ((n + 2) / 3) + 1));
+  size_t o = 0;
+  for (size_t i = 0; i < n; i += 3) {
+    u32 x = (u32)p[i] << 16 | (i + 1 < n ? (u32)p[i + 1] << 8 : 0)
+      | (i + 2 < n ? (u32)p[i + 2] : 0);
+    out[o++] = abc[x >> 18 & 63];
+    out[o++] = abc[x >> 12 & 63];
+    out[o++] = i + 1 < n ? abc[x >> 6 & 63] : '=';
+    out[o++] = i + 2 < n ? abc[x & 63] : '=';
+  }
+  Term t = io_str(e, out, o);
+  free(out);
+  return t;
+}
+
+static void* net_key_open(const char* path) {
+  FILE* f = fopen(path, "r");
+  if (f == NULL) {
+    return NULL;
+  }
+  void* key = net_key.read_key(f, NULL, NULL, NULL);
+  fclose(f);
+  return key;
+}
+
+// Dkim.sha256(data): the SHA-256 of the text's bytes, in base64.
+Term dkim_sha256_run(Env e, Term* f, IoWork* w) {
+  u64   n = 0;
+  char* d = io_cstr(e, f[0], &n);
+  if (!net_key_load()) {
+    free(d);
+    return io_fail(e, 0, "dkim: libcrypto (OpenSSL 1.1.1 or 3) was not found");
+  }
+  unsigned char md[32];
+  net_key.sha256((unsigned char*)d, (size_t)n, md);
+  free(d);
+  return io_done(e, net_b64(e, md, 32));
+}
+
+static void __attribute__((constructor)) dkim_sha256_use(void) {
+#ifdef CID_DKIM_SHA256
+  io_eff(CID_DKIM_SHA256, dkim_sha256_run, 0);
+#endif
+}
+
+// Dkim.alg(keyfile): "rsa-sha256" or "ed25519-sha256", by the key's kind.
+Term dkim_alg_run(Env e, Term* f, IoWork* w) {
+  u64   n = 0;
+  char* path = io_cstr(e, f[0], &n);
+  const char* bad = NULL;
+  const char* alg = NULL;
+  if (!net_key_load()) {
+    bad = "dkim: libcrypto (OpenSSL 1.1.1 or 3) was not found";
+  } else {
+    void* key = io_nul(path, n) ? NULL : net_key_open(path);
+    int   id  = key != NULL ? net_key.key_id(key) : 0;
+    if (key == NULL) {
+      bad = "dkim: cannot read the private key (a PEM file is expected)";
+    } else if (id == NET_KEY_RSA) {
+      alg = "rsa-sha256";
+    } else if (id == NET_KEY_ED25519) {
+      alg = "ed25519-sha256";
+    } else {
+      bad = "dkim: the key is neither RSA nor Ed25519";
+    }
+    if (key != NULL) {
+      net_key.key_free(key);
+    }
+  }
+  free(path);
+  return bad != NULL ? io_fail(e, 0, bad) : io_done(e, io_str(e, alg, strlen(alg)));
+}
+
+static void __attribute__((constructor)) dkim_alg_use(void) {
+#ifdef CID_DKIM_ALG
+  io_eff(CID_DKIM_ALG, dkim_alg_run, 0);
+#endif
+}
+
+// Dkim.sign(keyfile, data): the signature of the text's bytes, in base64.
+Term dkim_sign_run(Env e, Term* f, IoWork* w) {
+  u64   pn = 0, dn = 0;
+  char* path = io_cstr(e, f[0], &pn);
+  char* d    = io_cstr(e, f[1], &dn);
+  const char* bad = NULL;
+  Term  out = 0;
+  void* key = NULL;
+  void* ctx = NULL;
+  if (!net_key_load()) {
+    bad = "dkim: libcrypto (OpenSSL 1.1.1 or 3) was not found";
+  } else if (io_nul(path, pn) || (key = net_key_open(path)) == NULL) {
+    bad = "dkim: cannot read the private key (a PEM file is expected)";
+  } else {
+    int id = net_key.key_id(key);
+    unsigned char md[32];
+    unsigned char sig[1024];
+    size_t len = sizeof(sig);
+    const unsigned char* in = (unsigned char*)d;
+    size_t n = (size_t)dn;
+    ctx = net_key.md_new();
+    int ok = ctx != NULL && (id == NET_KEY_RSA || id == NET_KEY_ED25519);
+    if (ok && id == NET_KEY_ED25519) {
+      net_key.sha256(in, n, md);
+      in = md;
+      n  = 32;
+    }
+    ok = ok && net_key.sign_init(ctx, NULL,
+      id == NET_KEY_RSA ? net_key.md_sha256() : NULL, NULL, key) == 1;
+    ok = ok && net_key.sign(ctx, sig, &len, in, n) == 1;
+    if (ok) {
+      out = io_done(e, net_b64(e, sig, len));
+    } else {
+      bad = "dkim: the key cannot sign (RSA up to 8192 bits, or Ed25519)";
+    }
+  }
+  if (ctx != NULL) {
+    net_key.md_free(ctx);
+  }
+  if (key != NULL) {
+    net_key.key_free(key);
+  }
+  free(path);
+  free(d);
+  return bad != NULL ? io_fail(e, 0, bad) : out;
+}
+
+static void __attribute__((constructor)) dkim_sign_use(void) {
+#ifdef CID_DKIM_SIGN
+  io_eff(CID_DKIM_SIGN, dkim_sign_run, 0);
 #endif
 }

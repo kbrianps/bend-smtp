@@ -37,10 +37,12 @@ type Opt is Data:
 def Args.valued() -> List<&2, String>:
   ["--host", "--port", "--tls", "--cafile", "--helo", "--user", "--auth",
     "--from", "--to", "--cc", "--bcc", "--reply-to", "--subject", "--body",
-    "--body-file", "--html", "--html-file", "--attach", "--header"]
+    "--body-file", "--html", "--html-file", "--attach", "--header", "--notify",
+    "--ret", "--envid", "--proxy", "--cert", "--key", "--dkim-domain",
+    "--dkim-selector", "--dkim-key"]
 
 def Args.alone() -> List<&2, String>:
-  ["--debug", "--individually"]
+  ["--debug", "--individually", "--lmtp", "--no-pipelining", "--chunking"]
 
 def Args.is(ks: List<&2, String>, k: String) -> Bool:
   List.contains(~String, ~String.eq, ks, k)
@@ -135,8 +137,9 @@ def Send.mode(+tls: String, +port: String) -> S.Mode:
 def Send.auth(+a: String) -> S.Auth:
   Bool.pick(S.Auth, String.eq(a, "plain"), S.APlain{},
   Bool.pick(S.Auth, String.eq(a, "login"), S.ALogin{},
+  Bool.pick(S.Auth, String.eq(a, "cram-md5"), S.ACram{},
   Bool.pick(S.Auth, String.eq(a, "xoauth2"), S.AXoauth2{},
-  Bool.pick(S.Auth, String.eq(a, "oauthbearer"), S.ABearer{}, S.AAuto{}))))
+  Bool.pick(S.Auth, String.eq(a, "oauthbearer"), S.ABearer{}, S.AAuto{})))))
 
 def Send.port.or(m: Maybe<&2, U32>, +dflt: U32) -> U32:
   match m:
@@ -157,6 +160,33 @@ def Send.port.dflt(mode: S.Mode) -> U32:
 def Send.both(+os: List<&2, Opt>, a: String, b: String) -> Bool:
   Args.on(os, a) && Args.on(os, b)
 
+def Send.notify.words(ws: List<&2, String>) -> Bool:
+  match ws:
+    case Nil{}:
+      True{}
+    case Con{w, t}:
+      Args.is(["", "never", "success", "failure", "delay"], w)
+        && Send.notify.words(t)
+
+# NOTIFY's values (RFC 3461 4.1): never alone, or any of the others.
+def Send.notify.ok(+ws: List<&2, String>) -> Bool:
+  Send.notify.words(ws) && Bool.not(Args.is(ws, "never")
+    && Nat.is_lt(1n, List.length(&2, String, ws)))
+
+def Send.some(+os: List<&2, Opt>, ks: List<&2, String>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{k, t}:
+      Args.on(os, k) || Send.some(os, t)
+
+def Send.every(+os: List<&2, Opt>, ks: List<&2, String>) -> Bool:
+  match ks:
+    case Nil{}:
+      True{}
+    case Con{k, t}:
+      Args.on(os, k) && Send.every(os, t)
+
 # What is wrong with the options, or "".
 def Send.problem(+os: List<&2, Opt>) -> String:
   +bad = Args.bad(os)
@@ -172,13 +202,34 @@ def Send.problem(+os: List<&2, Opt>) -> String:
     "--individually sends to each --to alone: it takes no --cc or --bcc",
   Bool.pick(String, Bool.not(Args.is(["", "tls", "starttls", "plain"],
     Args.get(os, "--tls"))), "--tls takes starttls, tls or plain",
-  Bool.pick(String, Bool.not(Args.is(["", "plain", "login", "xoauth2",
+  Bool.pick(String, Bool.not(Args.is(["", "plain", "login", "cram-md5", "xoauth2",
     "oauthbearer"], Args.get(os, "--auth"))),
-    "--auth takes plain, login, xoauth2 or oauthbearer",
+    "--auth takes plain, login, cram-md5, xoauth2 or oauthbearer",
+  Bool.pick(String, Bool.not(Send.notify.ok(String.split(String.to_lower(
+    Args.get(os, "--notify")), ','))),
+    "--notify takes never, or success, failure and delay, comma-separated",
+  Bool.pick(String, Bool.not(Args.is(["", "full", "hdrs"],
+    String.to_lower(Args.get(os, "--ret")))), "--ret takes full or hdrs",
+  Bool.pick(String, Bool.not(String.is_empty(Args.get(os, "--cert")))
+    && String.is_empty(Args.get(os, "--key"))
+    || String.is_empty(Args.get(os, "--cert"))
+    && Bool.not(String.is_empty(Args.get(os, "--key"))),
+    "--cert and --key go together",
+  Bool.pick(String, Send.some(os, ["--dkim-domain", "--dkim-selector", "--dkim-key"])
+    && Bool.not(Send.every(os, ["--dkim-domain", "--dkim-selector", "--dkim-key"])),
+    "--dkim-domain, --dkim-selector and --dkim-key go together",
   Bool.pick(String, Send.both(os, "--body", "--body-file"),
     "--body and --body-file exclude each other",
   Bool.pick(String, Send.both(os, "--html", "--html-file"),
-    "--html and --html-file exclude each other", ""))))))))))
+    "--html and --html-file exclude each other", ""))))))))))))))
+
+# The named options of S.Opts, from the flags of the same names.
+def Send.more(+os: List<&2, Opt>, ks: List<&2, String>) -> List<&2, S.Kv>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, t}:
+      S.Kv{k, Args.get(os, "--" ++ k)} <> Send.more(os, t)
 
 def Send.opts(+os: List<&2, Opt>, pass: String, token: String) -> S.Opts:
   +port = Args.get(os, "--port")
@@ -186,7 +237,9 @@ def Send.opts(+os: List<&2, Opt>, pass: String, token: String) -> S.Opts:
   S.Opts{Args.get(os, "--host"),
     Send.port.or(U32.read(port), Send.port.dflt(mode)), mode,
     Args.get(os, "--cafile"), Args.get(os, "--helo"), Args.get(os, "--user"), pass,
-    Send.auth(Args.get(os, "--auth")), token, Args.on(os, "--debug")}
+    Send.auth(Args.get(os, "--auth")), token, Args.on(os, "--debug"),
+    Send.more(os, ["lmtp", "notify", "ret", "envid", "no-pipelining", "chunking",
+      "proxy", "cert", "key", "dkim-domain", "dkim-selector", "dkim-key"])}
 
 # "Name: value" as a header; a line with no ":" has no name, and is
 # refused later.
@@ -246,6 +299,7 @@ def Send.creds(+user: String, +auth: String, +pass: String, +token: String) ->
   String:
   +oauth = String.eq(auth, "xoauth2") || String.eq(auth, "oauthbearer")
   +basic = String.eq(auth, "plain") || String.eq(auth, "login")
+    || String.eq(auth, "cram-md5")
   Bool.pick(String, String.is_empty(user), "",
   Bool.pick(String, oauth && String.is_empty(token),
     "--auth " ++ auth ++ " needs the access token in SMTP_OAUTH_TOKEN",
@@ -448,8 +502,12 @@ def Send.usage() -> String:
     ++ " [--subject S] [--body B | --body-file P] [--html H | --html-file P]"
     ++ " [--attach P]... [--header \"Name: value\"]... [--individually]"
     ++ " [--tls starttls|tls|plain] [--port N] [--user U]"
-    ++ " [--auth plain|login|xoauth2|oauthbearer] [--cafile P] [--helo NAME]"
-    ++ " [--debug]\nsecrets: SMTP_PASSWORD or SMTP_OAUTH_TOKEN"
+    ++ " [--auth plain|login|cram-md5|xoauth2|oauthbearer] [--cafile P]"
+    ++ " [--cert P --key P] [--helo NAME] [--proxy socks5://[U:P@]H:PORT]"
+    ++ " [--notify never|success,failure,delay] [--ret full|hdrs] [--envid ID]"
+    ++ " [--dkim-domain D --dkim-selector S --dkim-key P] [--lmtp]"
+    ++ " [--no-pipelining] [--chunking] [--debug]"
+    ++ "\nsecrets: SMTP_PASSWORD or SMTP_OAUTH_TOKEN"
 
 def Send.creds.ok(problem: String, +os: List<&2, Opt>, pass: String,
   token: String) -> IO(Unit):

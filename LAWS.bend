@@ -8,6 +8,8 @@ import ./sink.bend as K
 import ./mime.bend as M
 import ./idna.bend as I
 import ./addr.bend as A
+import ./md5.bend as D
+import ./dkim.bend as Q
 
 # Injection
 # ---------
@@ -105,22 +107,25 @@ law body_long_line:
 # SIZE (RFC 1870), and SMTPUTF8 (with BODY=8BITMIME when offered) only
 # when the message needs it (RFC 6531 3.4).
 law mail_params:
-  {[S.Smtp.mail("a@b.c", 1000, 42, False{}, True{}),
-    S.Smtp.mail("a@b.c", 0, 42, False{}, True{}),
-    S.Smtp.mail("joão@b.c", 0, 42, True{}, True{}),
-    S.Smtp.mail("joão@b.c", 0, 42, True{}, False{})]
+  {[S.Smtp.mail("a@b.c", 1000, 42, False{}, True{}, ""),
+    S.Smtp.mail("a@b.c", 0, 42, False{}, True{}, ""),
+    S.Smtp.mail("joão@b.c", 0, 42, True{}, True{}, ""),
+    S.Smtp.mail("joão@b.c", 0, 42, True{}, False{}, ""),
+    S.Smtp.mail("a@b.c", 0, 42, False{}, False{}, S.Dsn.mail("hdrs", "id+1"))]
     == ["MAIL FROM:<a@b.c> SIZE=42\r\n", "MAIL FROM:<a@b.c>\r\n",
       "MAIL FROM:<joão@b.c> SMTPUTF8 BODY=8BITMIME\r\n",
-      "MAIL FROM:<joão@b.c> SMTPUTF8\r\n"] : List<String>}
+      "MAIL FROM:<joão@b.c> SMTPUTF8\r\n",
+      "MAIL FROM:<a@b.c> RET=HDRS ENVID=id+2B1\r\n"] : List<String>}
 
 # LAW: EHLO's lines give STARTTLS, the AUTH mechanisms (also in the old
 # "AUTH=" spelling) and SIZE; the first line is only the server's name.
 law ehlo_caps:
   {[S.Caps.of("mx.example STARTTLS\nstarttls\nAUTH LOGIN PLAIN XOAUTH2\nSIZE 35882577\nSMTPUTF8\n8BITMIME"),
     S.Caps.of("mx\nAUTH=LOGIN\n8BITMIME"), S.Caps.of("mx\nSIZE")]
-    == [S.Caps{True{}, ["LOGIN", "PLAIN", "XOAUTH2"], 35882577, True{}, True{}},
-      S.Caps{False{}, ["LOGIN"], 0, False{}, True{}},
-      S.Caps{False{}, [], 0, False{}, False{}}]
+    == [S.Caps{True{}, ["LOGIN", "PLAIN", "XOAUTH2"], 35882577, True{}, True{},
+        ["STARTTLS", "AUTH", "SIZE", "SMTPUTF8", "8BITMIME"]},
+      S.Caps{False{}, ["LOGIN"], 0, False{}, True{}, ["AUTH=LOGIN", "8BITMIME"]},
+      S.Caps{False{}, [], 0, False{}, False{}, ["SIZE"]}]
     : List<S.Caps>}
 
 # LAW: addresses are dot-atom local@domain; anything that could break
@@ -374,3 +379,144 @@ law batch_keeps_order:
   for error: String
   {S.Batch.add(a, S.Batch.add(b, S.Batch{[], code, error}))
     == S.Batch{[a, b], code, error} : S.Batch}
+
+# Delivery status notifications (RFC 3461)
+# ----------------------------------------
+
+# LAW: RCPT asks for the notifications and names the original recipient
+# in xtext ("+" and "=" as +2B and +3D); with nothing asked, nothing is
+# added.
+law dsn_rcpt:
+  {[S.Smtp.rcpt("a+b@x.com", S.Dsn.rcpt("success,failure", "a+b@x.com")),
+    S.Smtp.rcpt("a@x.com", S.Dsn.rcpt("", "a@x.com")), S.Xtext.of("a=b c")]
+    == ["RCPT TO:<a+b@x.com> NOTIFY=SUCCESS,FAILURE ORCPT=rfc822;a+2Bb@x.com\r\n",
+      "RCPT TO:<a@x.com>\r\n", "a+3Db+20c"] : List<String>}
+
+# The plan of a message
+# ---------------------
+
+# LAW: an extension is used only when the server announced it: with a
+# bare server there is no pipelining, no BDAT and no DSN parameter, even
+# when asked for; announced, pipelining is on unless turned off, BDAT
+# only when asked, and the DSN parameters appear.
+law plan_follows_offers:
+  {[S.Smtp.plan(S.Opts{"h", 25, S.Plain{}, "", "", "", "", S.AAuto{}, "", False{},
+        [S.Kv{"chunking", "yes"}, S.Kv{"notify", "never"}]}, S.Caps.of("mx"),
+      S.Job{S.Mail{A.Mbox{"", "f@x.com"}, [A.Mbox{"", "a@x.com"}], [], [], [], "", "",
+        "", [], []}, "m"}),
+    S.Smtp.plan(S.Opts{"h", 25, S.Plain{}, "", "", "", "", S.AAuto{}, "", False{},
+        [S.Kv{"chunking", "yes"}, S.Kv{"notify", "never"}]},
+      S.Caps.of("mx\nPIPELINING\nCHUNKING\nDSN"),
+      S.Job{S.Mail{A.Mbox{"", "f@x.com"}, [A.Mbox{"", "a@x.com"}], [], [], [], "", "",
+        "", [], []}, "m"}),
+    S.Smtp.plan(S.Opts{"h", 25, S.Plain{}, "", "", "", "", S.AAuto{}, "", False{},
+        [S.Kv{"no-pipelining", "yes"}, S.Kv{"lmtp", "yes"}]},
+      S.Caps.of("mx\nPIPELINING\nCHUNKING"),
+      S.Job{S.Mail{A.Mbox{"", "f@x.com"}, [A.Mbox{"", "a@x.com"}], [], [], [], "", "",
+        "", [], []}, "m"})]
+    == [S.Plan{False{}, False{}, False{}, "MAIL FROM:<f@x.com>\r\n",
+        [S.Rc{"a@x.com", "RCPT TO:<a@x.com>\r\n"}], "m"},
+      S.Plan{True{}, True{}, False{}, "MAIL FROM:<f@x.com>\r\n",
+        [S.Rc{"a@x.com", "RCPT TO:<a@x.com> NOTIFY=NEVER ORCPT=rfc822;a@x.com\r\n"}],
+        "m"},
+      S.Plan{False{}, False{}, True{}, "MAIL FROM:<f@x.com>\r\n",
+        [S.Rc{"a@x.com", "RCPT TO:<a@x.com>\r\n"}], "m"}] : List<S.Plan>}
+
+# LAW: piped, the commands go in one write, DATA last, unless the
+# message goes by BDAT, whose chunk carries the exact size and no
+# dot-stuffing.
+law pipeline_blob:
+  {[S.Plan.blob(S.Plan{True{}, False{}, False{}, "MAIL FROM:<f@x.com>\r\n",
+      [S.Rc{"a@x.com", "RCPT TO:<a@x.com>\r\n"}, S.Rc{"b@x.com", "RCPT TO:<b@x.com>\r\n"}],
+      "m"}),
+    S.Plan.blob(S.Plan{True{}, True{}, False{}, "MAIL FROM:<f@x.com>\r\n",
+      [S.Rc{"a@x.com", "RCPT TO:<a@x.com>\r\n"}], "m"}),
+    S.Plan.chunk(S.Plan{True{}, True{}, False{}, "", [], ".a\r\nção\r\n"})]
+    == ["MAIL FROM:<f@x.com>\r\nRCPT TO:<a@x.com>\r\nRCPT TO:<b@x.com>\r\nDATA\r\n",
+      "MAIL FROM:<f@x.com>\r\nRCPT TO:<a@x.com>\r\n",
+      "BDAT 11 LAST\r\n.a\r\nção\r\n"] : List<String>}
+
+# CRAM-MD5
+# --------
+
+# LAW: MD5 matches RFC 1321's test suite (appendix A.5).
+law md5_vectors:
+  {[D.Md5.hex(D.Md5.hash(M.Utf8.bytes(""))), D.Md5.hex(D.Md5.hash(M.Utf8.bytes("abc"))),
+    D.Md5.hex(D.Md5.hash(M.Utf8.bytes("message digest"))),
+    D.Md5.hex(D.Md5.hash(M.Utf8.bytes(
+      "12345678901234567890123456789012345678901234567890123456789012345678901234567890")))]
+    == ["d41d8cd98f00b204e9800998ecf8427e", "900150983cd24fb0d6963f7d28e17f72",
+      "f96b697d7cb7938d525a2f31aaf161d0", "57edf4a22be3c955ac49da2e2107b67a"]
+    : List<String>}
+
+# LAW: CRAM-MD5's response matches RFC 2195's example (section 2): tim,
+# tanstaaftanstaaf, and the server's challenge.
+law cram_md5_vector:
+  {S.Smtp.cram.resp("tim", "tanstaaftanstaaf",
+    "PDE4OTYuNjk3MTcwOTUyQHBvc3RvZmZpY2UucmVzdG9uLm1jaS5uZXQ+")
+    == "dGltIGI5MTNhNjAyYzdlZGE3YTQ5NWI0ZTZlNzMzNGQzODkw" : String}
+
+# LAW: CRAM-MD5 is picked on its own only after PLAIN and LOGIN, and
+# when asked for only if offered.
+law cram_choice:
+  {[S.Mech.pick(S.AAuto{}, False{}, ["CRAM-MD5", "PLAIN"]),
+    S.Mech.pick(S.AAuto{}, False{}, ["CRAM-MD5"]),
+    S.Mech.pick(S.ACram{}, False{}, ["PLAIN"])]
+    == [S.MPlain{}, S.MCram{}, S.MNo{"the server does not offer AUTH CRAM-MD5"}]
+    : List<S.Mech>}
+
+# Proxy
+# -----
+
+# LAW: a SOCKS5 URL gives the host, the port (1080 when absent), and the
+# user and password, the last "@" dividing them from the host; any other
+# scheme gives no proxy.
+law proxy_url:
+  {[S.Proxy.of("socks5://p.example:9050"), S.Proxy.of("socks5://p.example"),
+    S.Proxy.of("socks5://zé:s:e@nha@127.0.0.1:1081"), S.Proxy.of("http://p.example:80"),
+    S.Proxy.of("")]
+    == [S.Proxy{"p.example", 9050, "", ""}, S.Proxy{"p.example", 1080, "", ""},
+      S.Proxy{"127.0.0.1", 1081, "zé", "s:e@nha"}, S.Proxy{"", 0, "", ""},
+      S.Proxy{"", 0, "", ""}] : List<S.Proxy>}
+
+# DKIM
+# ----
+
+# LAW: the relaxed forms match RFC 6376's example (section 3.4.5): field
+# names in lower case, folds and runs of spaces reduced, and in the body
+# the trailing spaces and empty lines gone.
+law dkim_relaxed:
+  {[Q.Dkim.relaxed(Q.Field{"A", " X"}), Q.Dkim.relaxed(Q.Field{"B ", " Y\t\r\n\tZ  "}),
+    Q.Dkim.body(" C \r\nD \t E\r\n\r\n\r\n", False{}, 0n, ""),
+    Q.Dkim.body("", False{}, 0n, ""), Q.Dkim.body("\r\n\r\n", False{}, 0n, ""),
+    Q.Dkim.body("a", False{}, 0n, "")]
+    == ["a:X", "b:Y Z", " C\r\nD E\r\n", "", "", "a\r\n"] : List<String>}
+
+# LAW: a message is cut at its first empty line, and its fields are read
+# last first, a folded one whole and a repeated one twice.
+law dkim_fields:
+  {[Q.Dkim.cut("A: 1\r\nB: 2\r\n c\r\nA: 3\r\n\r\nbody\r\n\r\nmore", "")]
+    == [Q.Cut{"A: 1\r\nB: 2\r\n c\r\nA: 3\r\n", "body\r\n\r\nmore"}] : List<Q.Cut>}
+    & {Q.Dkim.fields("A: 1\r\nB: 2\r\n c\r\nA: 3\r\n")
+    == [Q.Field{"A", " 3"}, Q.Field{"B", " 2\r\n c"}, Q.Field{"A", " 1"}]
+    : List<&2, Q.Field>}
+
+# LAW: what is signed is each field in relaxed form with its CRLF, last
+# first, then the DKIM-Signature with b= empty and no CRLF after it.
+law dkim_signed_data:
+  {Q.Dkim.data(Q.Dkim.fields("From: a@b.c\r\nSubject:  Oi\r\n"),
+    Q.Dkim.tags("rsa-sha256", "b.c", "s1", 7, Q.Dkim.fields("From: a@b.c\r\nSubject:  Oi\r\n"),
+      "BH="))
+    == "subject:Oi\r\nfrom:a@b.c\r\ndkim-signature:v=1; a=rsa-sha256; c=relaxed/relaxed; d=b.c; s=s1; t=7; h=subject:from; bh=BH=; b="
+    : String}
+
+# LAW: a refusal already known is kept when the clean-up after it loses
+# the connection, and changes nothing when the batch went on.
+law refusal_kept:
+  for x: S.Sent
+  for y: S.Sent
+  for code: U32
+  for error: String
+  {S.Batch.first(x, S.Batch{[], code, error}) == S.Batch{[x], code, error} : S.Batch}
+    & {S.Batch.first(x, S.Batch{[y], code, error}) == S.Batch{[y], code, error}
+      : S.Batch}

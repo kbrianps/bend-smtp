@@ -11,9 +11,17 @@ def Net.connect(host: String, port: U32) ->
   import "./net.js"
 
 # A verified TLS 1.2+ session on the socket, for host; cafile "" trusts
-# the system's certificate store.
-def Net.tls(sock: Socket, host: String, cafile: String) ->
-  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+# the system's certificate store; cert and key ("" for none) are PEM
+# files with this side's certificate, for a server that asks for one.
+def Net.tls(sock: Socket, host: String, cafile: String, cert: String,
+  key: String) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./net.c"
+  import "./net.js"
+
+# A connection to host:port through a SOCKS5 proxy (RFC 1928), which
+# resolves the host; user "" skips its password step (RFC 1929).
+def Net.connect_via(proxy: String, pport: U32, user: String, pass: String,
+  host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
   import "./net.c"
   import "./net.js"
 

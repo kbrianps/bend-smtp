@@ -35,7 +35,7 @@ P2=$((PORT + 1))
 case_() {
   local name=$1 flags=$2 want=$3; shift 3
   python3 tests/server.py --port $P2 $flags --cert tests/certs/server.pem \
-    --key tests/certs/server.key --log "$TMP/$name.log" --out "$TMP/$name.eml" >/dev/null &
+    --key tests/certs/server.key --log "$TMP/$name.log" --out "$TMP/$name.eml" >/dev/null 2>&1 &
   local srv=$!
   sleep 0.6
   local out
@@ -122,6 +122,67 @@ case_ "connection lost mid-batch" "--hang-up-after 1" "^sent to a@x.com" --tls p
   --to "a@x.com, b@x.com, c@x.com" --individually
 out=$(cat "$TMP/last.out")
 grep -q "2 messages were not tried" <<<"$out" && ok "the sent one is kept, the rest reported" || bad "mid-batch: $out"
+
+# Extensions: pipelining, DSN, chunking; LMTP; CRAM-MD5.
+case_ "PIPELINING (replies held until DATA)" "--ext PIPELINING --hold" "^sent" --tls plain --to "a@x.com, b@x.com"
+case_ "piped, every recipient refused" "--ext PIPELINING --hold --reject-rcpt --data-always" \
+  "failed (550): every recipient was refused" --tls plain
+grep -q "^EMPTY MESSAGE: 0 octets" "$TMP/piped, every recipient refused.log" &&
+  ok "an unwanted 354 is ended with an empty message" || bad "piped 354"
+case_ "piped, MAIL refused"     "--ext PIPELINING --hold --reject-mail" "failed (550): 5.7.1 sender refused" --tls plain
+case_ "DSN parameters"          "--ext DSN" "^sent" --tls plain --notify success,failure --ret hdrs --envid "id+1"
+grep -q "^C: MAIL FROM:<me@example.com> RET=HDRS ENVID=id+2B1" "$TMP/DSN parameters.log" &&
+  grep -q "^C: RCPT TO:<a@example.com> NOTIFY=SUCCESS,FAILURE ORCPT=rfc822;a@example.com" "$TMP/DSN parameters.log" &&
+  ok "RET, ENVID, NOTIFY and ORCPT sent" || bad "DSN lines"
+case_ "DSN not offered, not sent" "" "^sent" --tls plain --notify never
+grep -q "NOTIFY" "$TMP/DSN not offered, not sent.log" && bad "NOTIFY without DSN" || ok "no DSN parameter without DSN"
+case_ "CHUNKING"                "--ext CHUNKING" "^sent" --tls plain --chunking --body $'a\n.b'
+grep -q "^C: BDAT [0-9]* LAST" "$TMP/CHUNKING.log" && grep -q "^\.b" "$TMP/CHUNKING.eml" &&
+  ok "BDAT carries the message unstuffed" || bad "BDAT"
+case_ "LMTP"                    "--lmtp --reject-final b@x.com" "^  b@x.com (550 5.2.2 mailbox full)" \
+  --tls plain --lmtp --to "a@x.com, b@x.com"
+grep -q "^C: LHLO" "$TMP/LMTP.log" && ok "LHLO, one final reply per recipient" || bad "LHLO"
+SMTP_PASSWORD=pw case_ "AUTH CRAM-MD5" "--mode tls --auth cram-md5 --user u --password pw" "^sent" --tls tls --user u
+SMTP_PASSWORD=no case_ "CRAM-MD5, wrong password" "--mode tls --auth cram-md5 --user u --password pw" "failed (535)" --tls tls --user u
+
+# A client certificate, and a SOCKS5 proxy.
+case_ "client certificate"      "--mode tls --client-ca tests/certs/ca.pem" "^sent" --tls tls \
+  --cert tests/certs/client.pem --key tests/certs/client.key
+case_ "no client certificate, refused" "--mode tls --client-ca tests/certs/ca.pem" "certificate required" --tls tls
+P3=$((PORT + 2))
+python3 tests/socks.py $P3 "$TMP/socks.log" "zé" "s:e@nha" >/dev/null 2>&1 & PROXY=$!
+case_ "SOCKS5 proxy with a password" "--mode starttls" "^sent" --proxy "socks5://zé:s:e@nha@127.0.0.1:$P3"
+wait $PROXY
+grep -q "^connect atyp=3 localhost:$P2" "$TMP/socks.log" && ok "the proxy gets the host name, not an address" || bad "socks target: $(cat "$TMP/socks.log")"
+python3 tests/socks.py $P3 "$TMP/socks2.log" u p >/dev/null 2>&1 & PROXY=$!
+sleep 0.4
+out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to a@example.com --body x \
+  --proxy "socks5://u:wrong@127.0.0.1:$P3" 2>&1)
+wait $PROXY
+grep -q "the proxy refused the user and password" <<<"$out" && ok "SOCKS5 wrong password" || bad "socks auth: $out"
+
+# DKIM: RSA and Ed25519, checked by tests/dkim_verify.py.
+for k in rsa ed; do
+  case_ "DKIM $k" "" "^sent" --tls plain --from "Zé <me@example.com>" --subject "Relatório — câmeras" \
+    --body $'linha  com   espaços  \n\n.ponto\nfim\n\n' --html "<p>Olá</p>" --header "X-A: 1" --header "X-A: 2" \
+    --dkim-domain example.com --dkim-selector s1 --dkim-key tests/certs/dkim-$k.key
+  python3 tests/dkim_verify.py "$TMP/DKIM $k.eml" tests/certs/dkim-$k.key &&
+    ok "DKIM $k signature verifies" || bad "DKIM $k signature"
+done
+python3 - "$TMP/DKIM rsa.eml" "$TMP/tampered.eml" "$TMP/relayed.eml" <<'PY'
+import sys
+raw = open(sys.argv[1], "rb").read()
+head, body = raw.split(b"\r\n\r\n", 1)
+open(sys.argv[2], "wb").write(raw.replace(b"Subject: ", b"Subject: X", 1))
+open(sys.argv[3], "wb").write(head.replace(b"From: ", b"From:   ", 1) + b"\r\n\r\n" + body + b"\r\n\r\n")
+PY
+python3 tests/dkim_verify.py "$TMP/tampered.eml" tests/certs/dkim-rsa.key 2>/dev/null &&
+  bad "a tampered subject still verifies" || ok "a tampered subject fails"
+python3 tests/dkim_verify.py "$TMP/relayed.eml" tests/certs/dkim-rsa.key &&
+  ok "spacing changed by a relay still verifies" || bad "relaxed canonicalization"
+out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to a@example.com --body x \
+  --dkim-domain x.com --dkim-selector s --dkim-key tests/certs/ca.pem 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "cannot read the private key" <<<"$out" && ok "a bad DKIM key stops the send" || bad "bad DKIM key: $rc $out"
 
 # The Bend sink over TLS and STARTTLS.
 for mode in tls starttls; do

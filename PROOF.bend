@@ -8,6 +8,8 @@ import ./sink.bend as K
 import ./mime.bend as M
 import ./idna.bend as I
 import ./addr.bend as A
+import ./md5.bend as D
+import ./dkim.bend as Q
 import ./LAWS.bend as Laws
 
 # One cleaned char on a clean rest: a newline is dropped, any other
@@ -157,3 +159,36 @@ def Laws.header_names():
 
 def Laws.batch_keeps_order(a, b, code, error):
   {==}
+
+def Laws.dsn_rcpt():
+  {==}
+
+def Laws.plan_follows_offers():
+  {==}
+
+def Laws.pipeline_blob():
+  {==}
+
+def Laws.md5_vectors():
+  {==}
+
+def Laws.cram_md5_vector():
+  {==}
+
+def Laws.cram_choice():
+  {==}
+
+def Laws.proxy_url():
+  {==}
+
+def Laws.dkim_signed_data():
+  {==}
+
+def Laws.dkim_relaxed():
+  {==}
+
+def Laws.dkim_fields():
+  ({==}, {==})
+
+def Laws.refusal_kept(x, y, code, error):
+  ({==}, {==})

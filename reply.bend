@@ -103,3 +103,7 @@ def Reply.class(r: Reply) -> U32:
 def Reply.code(r: Reply) -> U32:
   Reply{code, _} = r
   code
+
+def Reply.text(r: Reply) -> String:
+  Reply{_, text} = r
+  text

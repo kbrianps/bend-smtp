@@ -9,7 +9,7 @@ function net_connect(host, port) {
   return io_fail(95);
 }
 
-function net_tls(sock, host, cafile) {
+function net_tls(sock, host, cafile, cert, key) {
   return io_tup(sock, io_fail(95));
 }
 
@@ -43,4 +43,20 @@ function net_hostname() {
 
 function net_debug(on) {
   return { $: "Unit" };
+}
+
+function net_connect_via(proxy, pport, user, pass, host, port) {
+  return io_fail(95);
+}
+
+function dkim_sha256(data) {
+  return io_fail(95);
+}
+
+function dkim_alg(keyfile) {
+  return io_fail(95);
+}
+
+function dkim_sign(keyfile, data) {
+  return io_fail(95);
 }
