@@ -53,3 +53,10 @@ def Net.helo(sock: Socket) -> IO(Socket & String):
 def Net.hostname() -> IO(String):
   import "./net.c"
   import "./net.js"
+
+# Turn the dialog trace on (1) or off (0): every line sent and received
+# goes to stderr as "C: " and "S: ", with AUTH data masked and the
+# message's text replaced by its size.
+def Net.debug(on: U32) -> IO(Unit):
+  import "./net.c"
+  import "./net.js"

@@ -148,3 +148,12 @@ def Laws.filename_2231():
 
 def Laws.boundary_safe():
   {==}
+
+def Laws.extra_headers():
+  {==}
+
+def Laws.header_names():
+  {==}
+
+def Laws.batch_keeps_order(a, b, code, error):
+  {==}

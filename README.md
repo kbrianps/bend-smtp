@@ -6,7 +6,8 @@ Cliente SMTP em [Bend 2](https://github.com/bendlang/bend), com TLS, e um servid
     SMTP_PASSWORD=... ./send --host smtp.gmail.com --user eu@gmail.com \
       --from "Brian <eu@gmail.com>" --to "Ana <ana@x.com>, bia@y.com" \
       --cc c@z.com --bcc d@w.com --subject "Relatório" --body "texto" \
-      --html-file corpo.html --attach relatorio.pdf --attach foto.jpg
+      --html-file corpo.html --attach relatorio.pdf --attach foto.jpg \
+      --header "X-Campaign: outubro"
 
     # com OAuth 2 (Gmail, Outlook) em vez de senha:
     SMTP_OAUTH_TOKEN=ya29... ./send --host smtp.gmail.com --user eu@gmail.com ...
@@ -16,15 +17,20 @@ Cliente SMTP em [Bend 2](https://github.com/bendlang/bend), com TLS, e um servid
     ./sink PORT DIR tls CERT KEY             # TLS implícito
     ./sink PORT DIR starttls CERT KEY        # STARTTLS, exigido antes do MAIL
 
-    ./test.sh                                # leis + 34 cenários (BEND=caminho do bend)
+    ./test.sh                                # leis + 44 checagens (BEND=caminho do bend)
 
 Opções do `send`:
 - **destinatários:** `--to`, `--cc`, `--bcc` e `--reply-to` aceitam listas como se escreve (`"Silva, Ana" <ana@x.com>, bia@y.com`). Bcc recebe o RCPT mas nunca aparece no cabeçalho; endereço repetido recebe um RCPT só
 - **corpo:** `--body`/`--body-file` (texto) e `--html`/`--html-file` (vão juntos como alternativas); `--attach` (repete; até 25 MiB por arquivo)
+- **cabeçalhos próprios:** `--header "Nome: valor"` (repete). Os que o cliente já escreve (Subject, From, Content-Type...) são recusados
+- **uma mensagem por destinatário:** `--individually` manda uma cópia para cada `--to`, cada um vendo só a si, todas na mesma conexão
+- **depuração:** `--debug` mostra a conversa (`C:`/`S:`) no stderr, com credenciais como `(secret)` e o corpo só como tamanho
 - **conexão:** `--tls starttls` (padrão, porta 587), `tls` (implícito, 465) ou `plain` (25); `--port`; `--cafile` (confiar numa CA própria); `--helo`
 - **AUTH:** `--user` e `--auth plain|login|xoauth2|oauthbearer` (sem `--auth`, escolhe pelo que o servidor oferece: OAuth se houver token, senão PLAIN, senão LOGIN). Segredos só pelo ambiente: `SMTP_PASSWORD` ou `SMTP_OAUTH_TOKEN`
 
-Saída: 0 entregue a todos; 3 entregue, mas algum destinatário foi recusado (listados); 1 não enviado; 2 uso errado.
+Saída: 0 entregue a todos; 3 entregue em parte (um destinatário recusado, ou só algumas das mensagens); 1 nada enviado; 2 uso errado.
+
+Como biblioteca, o ponto de entrada é `Smtp.send_many(opts, mensagens)` em `smtp.bend` (ou `Smtp.send_mail` para uma só): devolve um `Batch` com o resultado de cada mensagem, na ordem, e o erro que encerrou a conexão, se houve.
 
 Só funciona no build nativo (`-o send`): o Bend também roda programas em JS (`bend send.bend` sem `-o`), mas a rede e o TLS aqui são efeitos em C, e o lado JS responde "não suportado".
 
@@ -32,7 +38,7 @@ Só funciona no build nativo (`-o send`): o Bend também roda programas em JS (`
 
 | RFC | O que cobre |
 |---|---|
-| 5321 SMTP | um destinatário recusado não derruba os outros (o 421 sim); diálogo, EHLO com fallback para HELO (HELO sempre com domínio, nunca literal), dot-stuffing, CRLF, linhas de comando até 512 octetos, timeouts da seção 4.5.3.2, QUIT esperando o 221, QUIT depois de qualquer recusa |
+| 5321 SMTP | várias mensagens por conexão, uma transação cada, com RSET depois de uma que parou no meio; um destinatário recusado não derruba os outros (o 421 sim); diálogo, EHLO com fallback para HELO (HELO sempre com domínio, nunca literal), dot-stuffing, CRLF, linhas de comando até 512 octetos, timeouts da seção 4.5.3.2, QUIT esperando o 221, QUIT depois de qualquer recusa |
 | 3207 STARTTLS | EHLO de novo depois do TLS; recusa dados que chegam antes do handshake (injeção); sem STARTTLS anunciado, não cai para texto aberto |
 | 8314 TLS implícito | porta 465; TLS 1.2 ou mais, certificado e nome verificados (OpenSSL, carregado em runtime) |
 | 4954 / 4616 AUTH | PLAIN (com continuação 334 quando passa de 512 octetos) e LOGIN; nunca sem TLS; um 334 de erro depois da resposta é encerrado com `*` |

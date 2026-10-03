@@ -40,3 +40,7 @@ function net_helo(sock) {
 function net_hostname() {
   return "localhost";
 }
+
+function net_debug(on) {
+  return { $: "Unit" };
+}

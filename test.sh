@@ -42,6 +42,7 @@ case_() {
   out=$(./send --host localhost --port $P2 --cafile tests/certs/ca.pem \
     --from me@example.com --to a@example.com --subject Oi --body ok "$@" 2>&1)
   wait $srv
+  printf '%s\n' "$out" > "$TMP/last.out"
   if grep -q -- "$want" <<<"$out"; then ok "$name"; else bad "$name: $out"; fi
 }
 export SMTP_PASSWORD=pw
@@ -89,6 +90,38 @@ case_ "multipart with attachments" "" "^sent" --tls plain --from "Eu <me@x.com>"
 python3 tests/check_parts.py "$TMP/multipart with attachments.eml" "$TMP/dados.bin" \
   "$TMP/relatório de manutenção.csv" && ok "parts, names and bytes intact, no Bcc" || bad "multipart check"
 grep -q "^C: RCPT TO:<c@x.com>" "$TMP/multipart with attachments.log" && ok "Bcc gets RCPT" || bad "Bcc RCPT"
+
+# Extra headers, the debug trace, several messages on one connection.
+case_ "extra headers"           "" "^sent" --tls plain --header "X-Campaign: outubro" \
+  --header "List-Unsubscribe: <https://x.example/u?id=1>"
+grep -q "^X-Campaign: outubro" "$TMP/extra headers.eml" &&
+  grep -q "^List-Unsubscribe: <https://x.example/u?id=1>" "$TMP/extra headers.eml" &&
+  ok "headers written as given" || bad "extra headers"
+out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to a@example.com \
+  --header "Subject: outro" 2>&1)
+grep -q "bad header" <<<"$out" && ok "own header refused before connecting" || bad "own header: $out"
+SMTP_PASSWORD=segredo123 case_ "debug trace" "--mode tls --auth plain --user u --password segredo123" \
+  "^C: (message, [0-9]* octets)" --tls tls --user u --body "corpo-secreto" --debug
+python3 tests/server.py --port $P2 --mode tls --auth login --user u --password segredo123 \
+  --cert tests/certs/server.pem --key tests/certs/server.key --log "$TMP/dbg.log" --out "$TMP/dbg.eml" >/dev/null &
+sleep 0.6
+out=$(SMTP_PASSWORD=segredo123 ./send --host localhost --port $P2 --cafile tests/certs/ca.pem --tls tls \
+  --user u --from me@example.com --to a@example.com --body corpo-secreto --debug 2>&1)
+wait
+if grep -q -e "segredo123" -e "corpo-secreto" -e "$(printf segredo123 | base64)" <<<"$out"; then
+  bad "the trace leaks a secret"; else ok "the trace hides the password and the text"; fi
+case_ "one message per recipient" "--reject b@x.com" "^sent to c@x.com" --tls plain \
+  --to "a@x.com, b@x.com, c@x.com" --individually
+grep -q "^C: RSET" "$TMP/one message per recipient.log" && [ -s "$TMP/one message per recipient.eml.2" ] &&
+  ! grep -q "c@x.com" "$TMP/one message per recipient.eml.1" &&
+  ok "RSET after the refused one, each sees only itself" || bad "individually"
+a=$(grep -h "^Message-ID" "$TMP/one message per recipient.eml.1")
+b=$(grep -h "^Message-ID" "$TMP/one message per recipient.eml.2")
+[ -n "$a" ] && [ "$a" != "$b" ] && ok "each message has its own Message-ID" || bad "Message-ID reuse"
+case_ "connection lost mid-batch" "--hang-up-after 1" "^sent to a@x.com" --tls plain \
+  --to "a@x.com, b@x.com, c@x.com" --individually
+out=$(cat "$TMP/last.out")
+grep -q "2 messages were not tried" <<<"$out" && ok "the sent one is kept, the rest reported" || bad "mid-batch: $out"
 
 # The Bend sink over TLS and STARTTLS.
 for mode in tls starttls; do

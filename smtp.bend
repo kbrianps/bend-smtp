@@ -1,7 +1,7 @@
 # SMTP client (RFC 5321), with STARTTLS (RFC 3207), implicit TLS (RFC
 # 8314), SIZE (RFC 1870), SMTPUTF8 (RFC 6531) and AUTH PLAIN, LOGIN,
-# XOAUTH2 and OAUTHBEARER (RFC 4954, 4616, 7628). One message per
-# connection:
+# XOAUTH2 and OAUTHBEARER (RFC 4954, 4616, 7628). One connection, then
+# one transaction per message:
 #
 #   S: 220 greeting                 (implicit TLS: after the handshake)
 #   C: EHLO name          S: 250    (a 5xx: HELO name, no extensions)
@@ -13,9 +13,11 @@
 #                                    refused one is reported, not fatal)
 #   C: DATA               S: 354
 #   C: the message, then "."   S: 250
+#   (MAIL again for the next message; RSET first if one stopped midway)
 #   C: QUIT               S: 221
 #
-# Any other refusal ends the talk with QUIT. The pure part (commands,
+# A refusal before the first MAIL ends the talk with QUIT; one inside a
+# message ends that message only. The pure part (commands,
 # capabilities, mechanisms, the message) is what LAWS.bend pins; the IO
 # part threads the socket and the read buffer through continuations.
 import Base
@@ -26,12 +28,17 @@ import ./net.bend as N
 import ./idna.bend as I
 import ./addr.bend as A
 
+# An extra header field, as "X-Mailer: bend-smtp".
+type Hdr is Data:
+  Hdr{name: String, value: String}
+
 # A message: sender, To, Cc, Bcc (never in the headers), Reply-To,
-# subject, plain text, HTML ("" for none) and attachments.
+# subject, plain text, HTML ("" for none), attachments and extra headers.
 type Mail is Data:
   Mail{from: A.Mbox, to: List<&2, A.Mbox>, cc: List<&2, A.Mbox>,
     bcc: List<&2, A.Mbox>, reply: List<&2, A.Mbox>, subject: String,
-    text: String, html: String, files: List<&2, M.Part>}
+    text: String, html: String, files: List<&2, M.Part>,
+    headers: List<&2, Hdr>}
 
 # Plain: no TLS. Tls: TLS from the first byte (port 465). StartTls: plain,
 # then STARTTLS, and the talk refuses to go on without it (port 587).
@@ -50,10 +57,11 @@ type Auth is Data:
 
 # Where and how to send. cafile "" trusts the system's store; user ""
 # sends no AUTH; helo "" asks the host (Net.helo); token is an OAuth 2
-# access token ("" for none).
+# access token ("" for none); debug writes the dialog to stderr, secrets
+# and the message's text left out.
 type Opts is Data:
   Opts{host: String, port: U32, mode: Mode, cafile: String, helo: String,
-    user: String, pass: String, auth: Auth, token: String}
+    user: String, pass: String, auth: Auth, token: String, debug: Bool}
 
 # What EHLO announced: STARTTLS, the AUTH mechanisms, SIZE (0: none),
 # SMTPUTF8 and 8BITMIME.
@@ -68,10 +76,36 @@ type Mech is Data:
   MBearer{}
   MNo{why: String}
 
-# The outcome: an error, or the recipients the server refused (the rest
-# got the message).
+# How one message went: code 0 when the server took it, else the reply
+# (or the reason) that stopped it; refused lists the recipients the
+# server did not take, the others having got it.
+type Sent is Data:
+  Sent{code: U32, error: String, refused: List<&2, String>}
+
+# How a connection went: one Sent per message tried, in order, then the
+# error that ended it early (code 0 and "" when none did). A message
+# after the error was not tried.
+type Batch is Data:
+  Batch{sent: List<&2, Sent>, code: U32, error: String}
+
+# A message and its text, ready to send.
+type Job is Data:
+  Job{mail: Mail, msg: String}
+
 def Out() -> Type:
-  Result<&1, &1, U32 & String, List<&2, String>>
+  Batch
+
+def Batch.add(x: Sent, b: Batch) -> Batch:
+  Batch{xs, code, error} = b
+  Batch{x <> xs, code, error}
+
+def Job.mail(j: Job) -> Mail:
+  Job{m, _} = j
+  m
+
+def Job.msg(j: Job) -> String:
+  Job{_, t} = j
+  t
 
 def Caps.none() -> Caps:
   Caps{False{}, Nil{}, 0, False{}, False{}}
@@ -80,7 +114,7 @@ def Caps.none() -> Caps:
 # -----------------------
 
 def Mail.from(m: Mail) -> String:
-  Mail{f, _, _, _, _, _, _, _, _} = m
+  Mail{f, _, _, _, _, _, _, _, _, _} = m
   A.Mbox.addr(f)
 
 def Smtp.uniq.at(seen: Bool, +x: String, rest: List<&2, String>) ->
@@ -101,14 +135,14 @@ def Smtp.uniq(xs: List<&2, String>, +seen: List<&2, String>) -> List<&2, String>
 
 # Who gets RCPT: To, Cc and Bcc, each address once.
 def Mail.rcpts(m: Mail) -> List<&2, String>:
-  Mail{_, to, cc, bcc, _, _, _, _, _} = m
+  Mail{_, to, cc, bcc, _, _, _, _, _, _} = m
   Smtp.uniq(List.append(&2, String, A.Mbox.addrs(to),
     List.append(&2, String, A.Mbox.addrs(cc), A.Mbox.addrs(bcc))), Nil{})
 
 # Whether the message needs SMTPUTF8 (RFC 6531): some local part is not
 # ASCII. A non-ASCII domain alone does not: it goes as A-labels.
 def Mail.utf8(m: Mail) -> Bool:
-  Mail{from, to, cc, bcc, reply, _, _, _, _} = m
+  Mail{from, to, cc, bcc, reply, _, _, _, _, _} = m
   A.Addr.utf8(A.Mbox.addr(from)) || A.Mbox.any.utf8(to) || A.Mbox.any.utf8(cc)
     || A.Mbox.any.utf8(bcc) || A.Mbox.any.utf8(reply)
 
@@ -117,9 +151,10 @@ def Mail.ascii.at(utf8: Bool, m: Mail) -> Mail:
     case True{}:
       m
     case False{}:
-      Mail{from, to, cc, bcc, reply, subject, text, html, files} = m
+      Mail{from, to, cc, bcc, reply, subject, text, html, files, headers} = m
       Mail{A.Mbox.ascii(from), A.Mbox.asciis(to), A.Mbox.asciis(cc),
-        A.Mbox.asciis(bcc), A.Mbox.asciis(reply), subject, text, html, files}
+        A.Mbox.asciis(bcc), A.Mbox.asciis(reply), subject, text, html, files,
+        headers}
 
 # The addresses as they will travel: with A-label domains, unless the
 # message needs SMTPUTF8, which carries them as written.
@@ -130,14 +165,46 @@ def Mail.bad(+what: String, +a: String) -> String:
   Bool.pick(String, String.is_empty(a), "", "bad " ++ what ++ " address: " ++ a)
 
 # What is wrong with a message's addresses, or "" if nothing.
+# A header name (RFC 5322 2.2): printable ASCII with no space or ":".
+def Hdr.name.ok(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{Chr{+c}, t}:
+      (c >= 33 && c <= 126 : U32) && Bool.not(U32.is_eq(c, 58)) && Hdr.name.ok(t)
+
+# The fields the client writes itself; an extra one would double them.
+def Hdr.own() -> List<&2, String>:
+  ["date", "from", "sender", "to", "cc", "bcc", "reply-to", "subject",
+    "message-id", "mime-version", "content-type", "content-transfer-encoding",
+    "content-disposition"]
+
+def Hdr.ok(+n: String) -> Bool:
+  Bool.not(String.is_empty(n)) && Hdr.name.ok(n)
+    && Bool.not(List.contains(~String, ~String.eq, Hdr.own(), String.to_lower(n)))
+
+# The first header that cannot go, or "".
+def Hdr.bad(hs: List<&2, Hdr>) -> String:
+  match hs:
+    case Nil{}:
+      ""
+    case Con{h, t}:
+      Hdr{+n, _} = h
+      Bool.pick(String, Hdr.ok(n), Hdr.bad(t), Bool.pick(String, String.is_empty(n),
+        "(no name)", n))
+
+# What is wrong with a message's addresses and headers, or "".
 def Mail.problem(+m: Mail) -> String:
-  Mail{from, to, cc, bcc, reply, _, _, _, _} = m
+  Mail{from, to, cc, bcc, reply, _, _, _, _, headers} = m
   +f = A.Mbox.addr(from)
   +b = A.Mbox.bad(to) ++ A.Mbox.bad(cc) ++ A.Mbox.bad(bcc)
+  +h = Hdr.bad(headers)
   Bool.pick(String, Bool.not(A.Addr.ok(f)), "bad sender address: " ++ f,
   Bool.pick(String, List.is_empty(&2, String, Mail.rcpts(m)), "no recipients",
   Bool.pick(String, Bool.not(String.is_empty(b)), "bad recipient address: " ++ b,
-    Mail.bad("Reply-To", A.Mbox.bad(reply)))))
+  Bool.pick(String, Bool.not(String.is_empty(h)),
+    "bad header (a malformed name, or one the client writes itself): " ++ h,
+    Mail.bad("Reply-To", A.Mbox.bad(reply))))))
 
 # Commands
 # --------
@@ -337,6 +404,21 @@ def Hex.go(n: Nat, +x: U32, acc: String) -> String:
 def Hex.of(x: U32) -> String:
   Hex.go(8n, x, "")
 
+# An extra header's value: as written when it is printable ASCII (a
+# structured value, like a URL in angle brackets, must not be encoded),
+# else as RFC 2047 words.
+def Hdr.value(+v: String) -> String:
+  Bool.pick(String, M.Mime.printable(v), v, M.Mime.encoded(v))
+
+def Hdr.shows(hs: List<&2, Hdr>) -> String:
+  match hs:
+    case Nil{}:
+      SNil{}
+    case Con{h, t}:
+      Hdr{n, v} = h
+      T.Text.clean(n) ++ ": " ++ Hdr.value(String.trim(T.Text.clean(v))) ++ "\r\n"
+        ++ Hdr.shows(t)
+
 # A list header, or nothing when the list is empty.
 def Smtp.header(name: String, +ms: List<&2, A.Mbox>) -> String:
   Bool.pick(String, List.is_empty(&2, A.Mbox, ms), "",
@@ -348,10 +430,10 @@ def Smtp.nobody(+to: List<&2, A.Mbox>, +cc: List<&2, A.Mbox>) -> String:
     "To: undisclosed-recipients:;\r\n", "")
 
 # The message (RFC 5322): Date, From, To, Cc, Reply-To, Subject,
-# Message-ID, MIME-Version, then the MIME entity. Bcc is never written.
+# Message-ID, the extra headers, MIME-Version, then the MIME entity. Bcc is never written.
 # t is the time, id a unique string, b the boundary stem.
 def Smtp.text(m: Mail, +t: U32, id: String, +b: String) -> String:
-  Mail{+from, +to, +cc, _, +reply, subject, text, html, files} = m
+  Mail{+from, +to, +cc, _, +reply, subject, text, html, files, headers} = m
   "Date: " ++ M.Date.fmt(t) ++ "\r\n"
     ++ "From: " ++ A.Mbox.show(from) ++ "\r\n"
     ++ Smtp.header("To", to) ++ Smtp.header("Cc", cc) ++ Smtp.nobody(to, cc)
@@ -359,6 +441,7 @@ def Smtp.text(m: Mail, +t: U32, id: String, +b: String) -> String:
     ++ "Subject: " ++ M.Mime.subject(T.Text.clean(subject)) ++ "\r\n"
     ++ "Message-ID: <" ++ T.Text.clean(id) ++ "@"
     ++ T.Text.clean(A.Addr.domain(A.Mbox.addr(from))) ++ ">\r\n"
+    ++ Hdr.shows(headers)
     ++ "MIME-Version: 1.0\r\n"
     ++ M.Mime.entity(text, html, files, b)
 
@@ -366,40 +449,44 @@ def Smtp.text(m: Mail, +t: U32, id: String, +b: String) -> String:
 # -------
 
 def Opts.host(o: Opts) -> String:
-  Opts{h, _, _, _, _, _, _, _, _} = o
+  Opts{h, _, _, _, _, _, _, _, _, _} = o
   h
 
 def Opts.port(o: Opts) -> U32:
-  Opts{_, p, _, _, _, _, _, _, _} = o
+  Opts{_, p, _, _, _, _, _, _, _, _} = o
   p
 
 def Opts.mode(o: Opts) -> Mode:
-  Opts{_, _, m, _, _, _, _, _, _} = o
+  Opts{_, _, m, _, _, _, _, _, _, _} = o
   m
 
 def Opts.cafile(o: Opts) -> String:
-  Opts{_, _, _, c, _, _, _, _, _} = o
+  Opts{_, _, _, c, _, _, _, _, _, _} = o
   c
 
 def Opts.helo(o: Opts) -> String:
-  Opts{_, _, _, _, h, _, _, _, _} = o
+  Opts{_, _, _, _, h, _, _, _, _, _} = o
   h
 
 def Opts.user(o: Opts) -> String:
-  Opts{_, _, _, _, _, u, _, _, _} = o
+  Opts{_, _, _, _, _, u, _, _, _, _} = o
   u
 
 def Opts.pass(o: Opts) -> String:
-  Opts{_, _, _, _, _, _, p, _, _} = o
+  Opts{_, _, _, _, _, _, p, _, _, _} = o
   p
 
 def Opts.auth(o: Opts) -> Auth:
-  Opts{_, _, _, _, _, _, _, a, _} = o
+  Opts{_, _, _, _, _, _, _, a, _, _} = o
   a
 
 def Opts.token(o: Opts) -> String:
-  Opts{_, _, _, _, _, _, _, _, t} = o
+  Opts{_, _, _, _, _, _, _, _, t, _} = o
   t
+
+def Opts.debug(o: Opts) -> Bool:
+  Opts{_, _, _, _, _, _, _, _, _, d} = o
+  d
 
 # IO
 # --
@@ -419,8 +506,9 @@ def Smtp.wait.end() -> U32:
 def Smtp.fuel() -> Nat:
   64n
 
+# The connection ended early, with nothing more sent.
 def Smtp.fail(code: U32, msg: String) -> Out():
-  Fail{(code, msg)}
+  Batch{Nil{}, code, msg}
 
 # The connection is broken: close it and report.
 def Smtp.drop(s: Socket, code: U32, msg: String) -> IO(Out()):
@@ -578,6 +666,11 @@ def Smtp.hello(+o: Opts, s: Socket, buf: String,
 # Envelope and message
 # --------------------
 
+# Send a line and read its reply (up to ms), whatever it says.
+def Smtp.ask(s: Socket, buf: String, line: String, ms: U32,
+  k: Socket -> String -> R.Reply -> IO(Out())) -> IO(Out()):
+  Smtp.send(s, line, s2 => Smtp.read(Smtp.fuel(), R.Reply.split(buf), s2, ms, k))
+
 # A RCPT's reply: counted when taken; noted when refused, and the talk
 # goes on; a 421 (the server is closing) ends it.
 def Smtp.rcpt.got(ok: Bool, closing: Bool, +r: R.Reply, +a: String, s: Socket,
@@ -601,11 +694,10 @@ def Smtp.rcpts(to: List<&2, String>, s: Socket, buf: String, +n: U32,
     case Nil{}:
       k(s, buf, n, bad)
     case Con{+a, rest}:
-      Smtp.send(s, Smtp.rcpt(a), s2 => Smtp.read(Smtp.fuel(), R.Reply.split(buf),
-        s2, Smtp.wait(), s3 => b3 => +r => Smtp.rcpt.got(
-          U32.is_eq(R.Reply.class(r), 2), U32.is_eq(R.Reply.code(r), 421), r, a,
-          s3, b3, n, bad, s4 => b4 => n4 => bad4 =>
-            Smtp.rcpts(rest, s4, b4, n4, bad4, k))))
+      Smtp.ask(s, buf, Smtp.rcpt(a), Smtp.wait(), s3 => b3 => +r => Smtp.rcpt.got(
+        U32.is_eq(R.Reply.class(r), 2), U32.is_eq(R.Reply.code(r), 421), r, a,
+        s3, b3, n, bad, s4 => b4 => n4 => bad4 =>
+          Smtp.rcpts(rest, s4, b4, n4, bad4, k)))
 
 def Smtp.octets.go(s: String, +n: U32) -> U32:
   match s:
@@ -618,53 +710,119 @@ def Smtp.octets.go(s: String, +n: U32) -> U32:
 def Smtp.octets(s: String) -> U32:
   Smtp.octets.go(s, 0)
 
-# With no recipient taken there is nothing to send: QUIT with the list.
-def Smtp.body(none: Bool, +msg: String, bad: List<&2, String>, s: Socket,
-  buf: String) -> IO(Out()):
+# A message stopped inside its transaction: RSET clears it (RFC 5321
+# 4.1.1.5), so the next message starts clean; then on with x.
+def Smtp.reset(s: Socket, buf: String, x: Sent,
+  next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
+  Smtp.talk(s, buf, "RSET\r\n", 2, Smtp.wait(), s2 => b2 => next(s2, b2, x))
+
+# The reply to the message itself: taken, or refused whole.
+def Smtp.end.got(ok: Bool, closing: Bool, r: R.Reply, bad: List<&2, String>,
+  s: Socket, buf: String, next: Socket -> String -> Sent -> IO(Out())) ->
+  IO(Out()):
+  match ok closing:
+    case True{} _:
+      next(s, buf, Sent{0, "", bad})
+    case False{} True{}:
+      R.Reply{code, text} = r
+      Smtp.quit(s, Smtp.fail(code, text))
+    case False{} False{}:
+      R.Reply{code, text} = r
+      next(s, buf, Sent{code, text, bad})
+
+def Smtp.data.got(ok: Bool, closing: Bool, r: R.Reply, msg: String,
+  bad: List<&2, String>, s: Socket, buf: String,
+  next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
+  match ok closing:
+    case True{} _:
+      Smtp.ask(s, buf, Smtp.data(msg), Smtp.wait.end(), s2 => b2 => +r2 =>
+        Smtp.end.got(U32.is_eq(R.Reply.class(r2), 2),
+          U32.is_eq(R.Reply.code(r2), 421), r2, bad, s2, b2, next))
+    case False{} True{}:
+      R.Reply{code, text} = r
+      Smtp.quit(s, Smtp.fail(code, text))
+    case False{} False{}:
+      R.Reply{code, text} = r
+      Smtp.reset(s, buf, Sent{code, text, bad}, next)
+
+# With no recipient taken there is nothing to send; else DATA and the
+# message.
+def Smtp.body(none: Bool, msg: String, bad: List<&2, String>, s: Socket,
+  buf: String, next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
   match none:
     case True{}:
-      Smtp.quit(s, Smtp.fail(550, "every recipient was refused: "
-        ++ String.join(bad, "; ")))
+      Smtp.reset(s, buf, Sent{550, "every recipient was refused", bad}, next)
     case False{}:
-      Smtp.talk(s, buf, "DATA\r\n", 3, Smtp.wait.data(),
-        s2 => b2 => Smtp.talk(s2, b2, Smtp.data(msg), 2, Smtp.wait.end(),
-          s3 => b3 => Smtp.quit(s3, Done{bad})))
+      Smtp.ask(s, buf, "DATA\r\n", Smtp.wait.data(), s2 => b2 => +r =>
+        Smtp.data.got(U32.is_eq(R.Reply.class(r), 3),
+          U32.is_eq(R.Reply.code(r), 421), r, msg, bad, s2, b2, next))
 
-def Smtp.deliver(+m: Mail, +msg: String, +c: Caps, s: Socket, buf: String) ->
-  IO(Out()):
+# MAIL's reply: on to the recipients, or the message is refused here
+# (no transaction began, so there is nothing to reset).
+def Smtp.mail.got(ok: Bool, closing: Bool, r: R.Reply, +j: Job, s: Socket,
+  buf: String, next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
+  match ok closing:
+    case True{} _:
+      Smtp.rcpts(Mail.rcpts(Job.mail(j)), s, buf, 0, Nil{},
+        s3 => b3 => +n => bad => Smtp.body(U32.is_zero(n), Job.msg(j), bad, s3,
+          b3, next))
+    case False{} True{}:
+      R.Reply{code, text} = r
+      Smtp.quit(s, Smtp.fail(code, text))
+    case False{} False{}:
+      R.Reply{code, text} = r
+      next(s, buf, Sent{code, text, Nil{}})
+
+def Smtp.deliver(+j: Job, +c: Caps, s: Socket, buf: String,
+  next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
   Caps{_, _, +size, _, +eight} = c
-  Smtp.talk(s, buf, Smtp.mail(Mail.from(m), size, Smtp.octets(msg), Mail.utf8(m),
-    eight), 2, Smtp.wait(),
-    s2 => b2 => Smtp.rcpts(Mail.rcpts(m), s2, b2, 0, Nil{},
-      s3 => b3 => +n => bad => Smtp.body(U32.is_zero(n), msg, bad, s3, b3)))
+  Smtp.ask(s, buf, Smtp.mail(Mail.from(Job.mail(j)), size,
+    Smtp.octets(Job.msg(j)), Mail.utf8(Job.mail(j)), eight), Smtp.wait(),
+    s2 => b2 => +r => Smtp.mail.got(U32.is_eq(R.Reply.class(r), 2),
+      U32.is_eq(R.Reply.code(r), 421), r, j, s2, b2, next))
 
-def Smtp.sized(big: Bool, +m: Mail, +msg: String, +size: U32, +c: Caps,
-  s: Socket, buf: String) -> IO(Out()):
+def Smtp.sized(big: Bool, +j: Job, +size: U32, +c: Caps, s: Socket,
+  buf: String, next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
   match big:
     case True{}:
-      Smtp.quit(s, Smtp.fail(552, "the message has "
-        ++ U32.show(Smtp.octets(msg)) ++ " bytes; the server takes at most "
-        ++ U32.show(size)))
+      next(s, buf, Sent{552, "the message has "
+        ++ U32.show(Smtp.octets(Job.msg(j))) ++ " bytes; the server takes at most "
+        ++ U32.show(size), Nil{}})
     case False{}:
-      Smtp.deliver(m, msg, c, s, buf)
+      Smtp.deliver(j, c, s, buf, next)
 
-def Smtp.utf8.ok(lacking: Bool, +m: Mail, +msg: String, +c: Caps, s: Socket,
-  buf: String) -> IO(Out()):
+def Smtp.utf8.ok(lacking: Bool, +j: Job, +c: Caps, s: Socket, buf: String,
+  next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
   match lacking:
     case True{}:
-      Smtp.quit(s, Smtp.fail(553, "a non-ASCII address needs SMTPUTF8, which "
-        ++ "the server does not offer"))
+      next(s, buf, Sent{553, "a non-ASCII address needs SMTPUTF8, which the "
+        ++ "server does not offer", Nil{}})
     case False{}:
       Caps{_, _, +size, _, _} = c
-      Smtp.sized(Bool.not(U32.is_zero(size)) && (Smtp.octets(msg) > size : U32),
-        m, msg, size, c, s, buf)
+      Smtp.sized(Bool.not(U32.is_zero(size))
+        && (Smtp.octets(Job.msg(j)) > size : U32), j, size, c, s, buf, next)
 
-# MAIL (refused up front when SIZE says the message is too big, or when
+# One message: MAIL (not even tried when SIZE says it is too big, or when
 # it needs SMTPUTF8 and the server lacks it), RCPT, DATA, the message.
-def Smtp.envelope(+m: Mail, +msg: String, +c: Caps, s: Socket, buf: String) ->
-  IO(Out()):
+# next gets how it went; only a broken or closing connection ends here.
+def Smtp.one(+j: Job, +c: Caps, s: Socket, buf: String,
+  next: Socket -> String -> Sent -> IO(Out())) -> IO(Out()):
   Caps{_, _, _, +utf8, _} = c
-  Smtp.utf8.ok(Mail.utf8(m) && Bool.not(utf8), m, msg, c, s, buf)
+  Smtp.utf8.ok(Mail.utf8(Job.mail(j)) && Bool.not(utf8), j, c, s, buf, next)
+
+def Smtp.more(x: Sent, rest: IO(Out())) -> IO(Out()):
+  IO.bind(Out(), Out(), rest, r => IO.pure(Out(), Batch.add(x, r)))
+
+# The messages, one transaction each on the same connection, then QUIT.
+# Each one's outcome is put in front of what the rest returns, so an
+# error later still reports the messages already sent.
+def Smtp.batch(js: List<&2, Job>, +c: Caps, s: Socket, buf: String) -> IO(Out()):
+  match js:
+    case Nil{}:
+      Smtp.quit(s, Batch{Nil{}, 0, ""})
+    case Con{j, rest}:
+      Smtp.one(j, c, s, buf, s2 => b2 => x =>
+        Smtp.more(x, Smtp.batch(rest, c, s2, b2)))
 
 # AUTH
 # ----
@@ -724,43 +882,43 @@ def Smtp.sasl(+mech: String, +resp: String, s: Socket, buf: String,
   +line = "AUTH " ++ mech ++ " " ++ resp ++ "\r\n"
   Smtp.sasl.at(Nat.is_le(String.length(line), 512n), line, mech, resp, s, buf, k)
 
-def Smtp.auth.with(mech: Mech, +o: Opts, +m: Mail, +msg: String, +c: Caps,
+def Smtp.auth.with(mech: Mech, +o: Opts, +js: List<&2, Job>, +c: Caps,
   s: Socket, buf: String) -> IO(Out()):
   match mech:
     case MPlain{}:
       Smtp.sasl("PLAIN", Smtp.plain.resp(Opts.user(o), Opts.pass(o)), s, buf,
-        s2 => b2 => Smtp.envelope(m, msg, c, s2, b2))
+        s2 => b2 => Smtp.batch(js, c, s2, b2))
     case MXoauth2{}:
       Smtp.sasl("XOAUTH2", Smtp.xoauth2.resp(Opts.user(o), Opts.token(o)), s, buf,
-        s2 => b2 => Smtp.envelope(m, msg, c, s2, b2))
+        s2 => b2 => Smtp.batch(js, c, s2, b2))
     case MBearer{}:
       Smtp.sasl("OAUTHBEARER", Smtp.bearer.resp(Opts.user(o), Opts.host(o),
         Opts.port(o), Opts.token(o)), s, buf,
-        s2 => b2 => Smtp.envelope(m, msg, c, s2, b2))
+        s2 => b2 => Smtp.batch(js, c, s2, b2))
     case MLogin{}:
       Smtp.talk(s, buf, "AUTH LOGIN\r\n", 3, Smtp.wait(),
         s2 => b2 => Smtp.talk(s2, b2, Smtp.b64.line(Opts.user(o)), 3, Smtp.wait(),
           s3 => b3 => Smtp.sasl.last(s3, b3, Smtp.b64.line(Opts.pass(o)), "LOGIN",
-            s4 => b4 => Smtp.envelope(m, msg, c, s4, b4))))
+            s4 => b4 => Smtp.batch(js, c, s4, b4))))
     case MNo{why}:
       Smtp.quit(s, Smtp.fail(0, why))
 
-def Smtp.auth(none: Bool, secure: Bool, +o: Opts, +m: Mail, +msg: String,
+def Smtp.auth(none: Bool, secure: Bool, +o: Opts, +js: List<&2, Job>,
   +c: Caps, s: Socket, buf: String) -> IO(Out()):
   match none secure:
     case True{} _:
-      Smtp.envelope(m, msg, c, s, buf)
+      Smtp.batch(js, c, s, buf)
     case False{} False{}:
       Smtp.quit(s, Smtp.fail(0, "refusing to send credentials without TLS"))
     case False{} True{}:
       Caps{_, +mechs, _, _, _} = c
       Smtp.auth.with(Mech.pick(Opts.auth(o), Bool.not(String.is_empty(Opts.token(o))),
-        mechs), o, m, msg, c, s, buf)
+        mechs), o, js, c, s, buf)
 
 # AUTH when there is a user, and only over TLS (RFC 4954 4).
-def Smtp.login(+o: Opts, +m: Mail, +msg: String, secure: Bool, +c: Caps,
+def Smtp.login(+o: Opts, +js: List<&2, Job>, secure: Bool, +c: Caps,
   s: Socket, buf: String) -> IO(Out()):
-  Smtp.auth(String.is_empty(Opts.user(o)), secure, o, m, msg, c, s, buf)
+  Smtp.auth(String.is_empty(Opts.user(o)), secure, o, js, c, s, buf)
 
 # TLS
 # ---
@@ -785,82 +943,116 @@ def Smtp.tls(+o: Opts, s: Socket, k: Socket -> IO(Out())) -> IO(Out()):
 # After STARTTLS's 220, nothing may wait in the buffer: bytes sent
 # before the handshake would be taken as sent under it (RFC 3207 4.2,
 # the STARTTLS injection attack).
-def Smtp.starttls(clean: Bool, +o: Opts, +m: Mail, +msg: String, s: Socket) ->
+def Smtp.starttls(clean: Bool, +o: Opts, +js: List<&2, Job>, s: Socket) ->
   IO(Out()):
   match clean:
     case True{}:
       Smtp.tls(o, s, s2 => Smtp.hello(o, s2, "",
-        c => s3 => b3 => Smtp.login(o, m, msg, True{}, c, s3, b3)))
+        c => s3 => b3 => Smtp.login(o, js, True{}, c, s3, b3)))
     case False{}:
       Smtp.drop(s, 0, "the server sent data after STARTTLS's reply")
 
-def Smtp.upgrade(offered: Bool, +o: Opts, +m: Mail, +msg: String, s: Socket,
+def Smtp.upgrade(offered: Bool, +o: Opts, +js: List<&2, Job>, s: Socket,
   buf: String) -> IO(Out()):
   match offered:
     case True{}:
       Smtp.talk(s, buf, "STARTTLS\r\n", 2, Smtp.wait(),
-        s2 => +b2 => Smtp.starttls(String.is_empty(b2), o, m, msg, s2))
+        s2 => +b2 => Smtp.starttls(String.is_empty(b2), o, js, s2))
     case False{}:
       Smtp.quit(s, Smtp.fail(0, "the server does not offer STARTTLS"))
 
 # After the first EHLO: STARTTLS and EHLO again in StartTls mode (with
 # no fallback to plain text), then AUTH and the envelope.
-def Smtp.secure(mode: Mode, +o: Opts, +m: Mail, +msg: String, +c: Caps,
+def Smtp.secure(mode: Mode, +o: Opts, +js: List<&2, Job>, +c: Caps,
   s: Socket, buf: String) -> IO(Out()):
   match mode:
     case Plain{}:
-      Smtp.login(o, m, msg, False{}, c, s, buf)
+      Smtp.login(o, js, False{}, c, s, buf)
     case Tls{}:
-      Smtp.login(o, m, msg, True{}, c, s, buf)
+      Smtp.login(o, js, True{}, c, s, buf)
     case StartTls{}:
       Caps{tls, _, _, _, _} = c
-      Smtp.upgrade(tls, o, m, msg, s, buf)
+      Smtp.upgrade(tls, o, js, s, buf)
 
 # Connect
 # -------
 
-def Smtp.greet(+o: Opts, +m: Mail, +msg: String, s: Socket) -> IO(Out()):
+def Smtp.greet(+o: Opts, +js: List<&2, Job>, s: Socket) -> IO(Out()):
   Smtp.read(Smtp.fuel(), R.Reply.split(""), s, Smtp.wait(), s1 => b1 => r =>
     Smtp.expect(r, 2, s1, b1, s2 => b2 => Smtp.hello(o, s2, b2,
-      c => s3 => b3 => Smtp.secure(Opts.mode(o), o, m, msg, c, s3, b3))))
+      c => s3 => b3 => Smtp.secure(Opts.mode(o), o, js, c, s3, b3))))
 
-def Smtp.opened(mode: Mode, +o: Opts, +m: Mail, +msg: String, s: Socket) ->
+def Smtp.opened(mode: Mode, +o: Opts, +js: List<&2, Job>, s: Socket) ->
   IO(Out()):
   match mode:
     case Tls{}:
-      Smtp.tls(o, s, s2 => Smtp.greet(o, m, msg, s2))
+      Smtp.tls(o, s, s2 => Smtp.greet(o, js, s2))
     case _:
-      Smtp.greet(o, m, msg, s)
+      Smtp.greet(o, js, s)
 
-def Smtp.connected(r: Result<&1, &1, U32 & String, Socket>, +o: Opts, +m: Mail,
-  +msg: String) -> IO(Out()):
+def Smtp.connected(r: Result<&1, &1, U32 & String, Socket>, +o: Opts, +js: List<&2, Job>) -> IO(Out()):
   match r:
     case Fail{e}:
       (code, err) = e
       IO.pure(Out(), Smtp.fail(code, "connect: " ++ err))
     case Done{s}:
-      Smtp.opened(Opts.mode(o), o, m, msg, s)
+      Smtp.opened(Opts.mode(o), o, js, s)
 
-def Smtp.go(+o: Opts, +m: Mail, +t: U32, +a: U32, b: U32, c: U32) -> IO(Out()):
-  +msg = Smtp.text(m, t, Hex.of(t) ++ "." ++ Hex.of(a) ++ Hex.of(b),
-    M.Mime.boundary(Hex.of(a) ++ Hex.of(c)))
-  do IO<Out()>:
-    r : Result<&1, &1, U32 & String, Socket> <- N.Net.connect(Opts.host(o),
-      Opts.port(o))
-    Smtp.connected(r, o, m, msg)
+def Smtp.job(+m: Mail, +t: U32, +a: U32, b: U32, c: U32) -> Job:
+  Job{m, Smtp.text(m, t, Hex.of(t) ++ "." ++ Hex.of(a) ++ Hex.of(b),
+    M.Mime.boundary(Hex.of(a) ++ Hex.of(c)))}
 
-def Smtp.checked(problem: String, +o: Opts, +m: Mail) -> IO(Out()):
-  match problem:
-    case SNil{}:
-      do IO<Out()>:
+# Each message's text, with its own Date, Message-ID and boundary.
+def Smtp.jobs(ms: List<&2, Mail>) -> IO(List<&2, Job>):
+  match ms:
+    case Nil{}:
+      IO.pure(List<&2, Job>, Nil{})
+    case Con{m, rest}:
+      do IO<List<&2, Job>>:
         t : U32 <- N.Net.time()
         a : U32 <- IO.try(U32, IO.random_u32())
         b : U32 <- IO.try(U32, IO.random_u32())
         c : U32 <- IO.try(U32, IO.random_u32())
-        Smtp.go(o, m, t, a, b, c)
+        js : List<&2, Job> <- Smtp.jobs(rest)
+        IO.pure(List<&2, Job>, Smtp.job(m, t, a, b, c) <> js)
+
+def Smtp.go(+o: Opts, ms: List<&2, Mail>) -> IO(Out()):
+  do IO<Out()>:
+    N.Net.debug(Bool.pick(U32, Opts.debug(o), 1, 0))
+    js : List<&2, Job> <- Smtp.jobs(ms)
+    r : Result<&1, &1, U32 & String, Socket> <- N.Net.connect(Opts.host(o),
+      Opts.port(o))
+    Smtp.connected(r, o, js)
+
+def Smtp.checked(problem: String, +o: Opts, ms: List<&2, Mail>) -> IO(Out()):
+  match problem:
+    case SNil{}:
+      Smtp.go(o, ms)
     case SCon{h, t}:
       IO.pure(Out(), Smtp.fail(0, SCon{h, t}))
 
+# The first message's problem, or "" (and "no messages" for none).
+def Smtp.problems(ms: List<&2, Mail>) -> String:
+  match ms:
+    case Nil{}:
+      ""
+    case Con{+m, rest}:
+      +p = Mail.problem(m)
+      Bool.pick(String, String.is_empty(p), Smtp.problems(rest), p)
+
+def Smtp.asciis(ms: List<&2, Mail>) -> List<&2, Mail>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      Mail.ascii(m) <> Smtp.asciis(rest)
+
+# Send the messages over one connection, as o says: one transaction
+# each, in order. Nothing is sent if any of them is malformed.
+def Smtp.send_many(+o: Opts, +ms: List<&2, Mail>) -> IO(Out()):
+  Smtp.checked(Bool.pick(String, List.is_empty(&2, Mail, ms), "no messages",
+    Smtp.problems(ms)), o, Smtp.asciis(ms))
+
 # Send one message as o says.
-def Smtp.send_mail(+o: Opts, +m: Mail) -> IO(Out()):
-  Smtp.checked(Mail.problem(m), o, Mail.ascii(m))
+def Smtp.send_mail(+o: Opts, m: Mail) -> IO(Out()):
+  Smtp.send_many(o, [m])

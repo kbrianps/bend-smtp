@@ -1,7 +1,8 @@
 """A scriptable SMTP server for testing the client (stdlib only).
 
 One connection, then it exits. Writes the dialog (C:/S: lines) to
---log and the message, as received after unstuffing, to --out.
+--log and each message, as received after unstuffing, to --out.N (and
+the last one to --out).
 
   --mode plain|tls|starttls   implicit TLS wraps the socket at once;
                               starttls offers STARTTLS (and requires it
@@ -15,6 +16,7 @@ One connection, then it exits. Writes the dialog (C:/S: lines) to
   --reject-rcpt               answer RCPT 550
   --reject ADDR               answer RCPT 550 for this address (repeats)
   --smtputf8                  announce SMTPUTF8 (RFC 6531)
+  --hang-up-after N           drop the connection after N messages
   --inject                    put a plaintext "250 injected" right after
                               STARTTLS's 220 (the client must refuse)
 """
@@ -33,6 +35,7 @@ p.add_argument("--reject", action="append", default=[])
 p.add_argument("--token", default="")
 p.add_argument("--inject", action="store_true")
 p.add_argument("--smtputf8", action="store_true")
+p.add_argument("--hang-up-after", type=int, default=0)
 p.add_argument("--cert", default="")
 p.add_argument("--key", default="")
 p.add_argument("--log", required=True)
@@ -95,6 +98,7 @@ def caps():
     return "\r\n".join(out) + "\r\n"
 
 
+count = 0
 say("220 test.example ESMTP ready\r\n")
 try:
     while True:
@@ -188,8 +192,15 @@ try:
                 if not d.endswith(b"\r\n") or len(d) > 1000:
                     log.write("BAD DATA LINE: %r\n" % d[:80])
                 data.append(d[1:] if d.startswith(b".") else d)
+            count += 1
             open(a.out, "wb").write(b"".join(data))
+            open("%s.%d" % (a.out, count), "wb").write(b"".join(data))
             say("250 2.0.0 queued\r\n")
+            if a.hang_up_after and count >= a.hang_up_after:
+                log.write("S: (hung up)\n")
+                break
+        elif v == "RSET":
+            say("250 ok\r\n")
         elif v == "QUIT":
             say("221 bye\r\n")
             break

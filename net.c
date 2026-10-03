@@ -15,6 +15,7 @@
 // trust store, or against a CA file the caller names.
 
 #include <dlfcn.h>
+#include <strings.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -86,6 +87,53 @@ static NetTls* net_at(int fd) {
 }
 
 static char net_msg[512];
+
+// The trace (Net.debug): lines sent and received, on stderr. A server's
+// 334 means the next line sent is AUTH data and 354 that it is the
+// message, so the first is masked and the second shown as its size; an
+// AUTH command's initial response is masked too.
+static int net_dbg;
+static int net_dbg_mask;
+static int net_dbg_data;
+
+static void net_dbg_lines(const char* who, const char* p, u64 n, int in) {
+  u64 i = 0;
+  while (i < n) {
+    u64 j = i;
+    while (j < n && p[j] != '\n') {
+      j += 1;
+    }
+    u64 len = j > i && p[j - 1] == '\r' ? j - i - 1 : j - i;
+    fprintf(stderr, "%s%.*s\n", who, (int)len, p + i);
+    if (in && len >= 3) {
+      net_dbg_mask = strncmp(p + i, "334", 3) == 0;
+      net_dbg_data = strncmp(p + i, "354", 3) == 0;
+    }
+    i = j + 1;
+  }
+}
+
+static void net_dbg_out(const char* p, u64 n) {
+  if (!net_dbg) {
+    return;
+  }
+  if (net_dbg_data) {
+    fprintf(stderr, "C: (message, %llu octets)\n", (unsigned long long)n);
+  } else if (net_dbg_mask) {
+    fprintf(stderr, "C: (secret)\n");
+  } else if (n > 5 && strncasecmp(p, "AUTH ", 5) == 0) {
+    const char* sp = memchr(p + 5, ' ', n - 5);
+    u64 len = sp != NULL ? (u64)(sp - p) : n;
+    while (len > 0 && (p[len - 1] == '\n' || p[len - 1] == '\r')) {
+      len -= 1;
+    }
+    fprintf(stderr, "C: %.*s%s\n", (int)len, p, sp != NULL ? " (secret)" : "");
+  } else {
+    net_dbg_lines("C: ", p, n, 0);
+  }
+  net_dbg_mask = 0;
+  net_dbg_data = 0;
+}
 
 static void* net_sym(const char* name, int* ok) {
   void* p = dlsym(net_ssl.lib, name);
@@ -273,6 +321,9 @@ static Term net_tls_more(Env e, IoWork* w) {
   net_ssl.err_clear();
   int r = t->server ? net_ssl.do_accept(t->ssl) : net_ssl.do_connect(t->ssl);
   if (r == 1) {
+    if (net_dbg) {
+      fprintf(stderr, "* TLS on\n");
+    }
     return net_tls_end(e, w, io_done(e, term_pak(CID_UNIT, 0)));
   }
   int k = net_ssl.get_error(t->ssl, r);
@@ -460,6 +511,7 @@ Term net_send_run(Env e, Term* f, IoWork* w) {
   w->made = 0;
   w->code = 0;
   w->text = NULL;
+  net_dbg_out(w->data, w->size);
   return net_send_more(e, w);
 }
 
@@ -481,6 +533,9 @@ static Term net_poll_end(Env e, IoWork* w, Term r) {
 }
 
 static Term net_poll_some(Env e, IoWork* w, u64 n) {
+  if (net_dbg && n > 0) {
+    net_dbg_lines("S: ", w->data, n, 1);
+  }
   return net_poll_end(e, w, io_done(e,
     io_box(e, CID_SOME, io_str(e, w->data, n))));
 }
@@ -614,5 +669,19 @@ Term net_helo_run(Env e, Term* f, IoWork* w) {
 static void __attribute__((constructor)) net_helo_use(void) {
 #ifdef CID_NET_HELO
   io_eff(CID_NET_HELO, net_helo_run, 0);
+#endif
+}
+
+// Net.debug
+// ---------
+
+Term net_debug_run(Env e, Term* f, IoWork* w) {
+  net_dbg = (u32)f[0] != 0;
+  return term_pak(CID_UNIT, 0);
+}
+
+static void __attribute__((constructor)) net_debug_use(void) {
+#ifdef CID_NET_DEBUG
+  io_eff(CID_NET_DEBUG, net_debug_run, 0);
 #endif
 }

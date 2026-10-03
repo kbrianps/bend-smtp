@@ -148,16 +148,16 @@ law punycode:
 # alone travels as A-labels, and then the whole message stays ASCII.
 law needs_smtputf8:
   {[S.Mail.utf8(S.Mail{A.Mbox{"", "a@b.c"}, [A.Mbox{"João", "joão@exemplo.br"}], [],
-      [], [], "", "", "", []}),
+      [], [], "", "", "", [], []}),
     S.Mail.utf8(S.Mail{A.Mbox{"", "a@b.c"}, [], [], [A.Mbox{"", "joao@exemplo-ção.br"}],
-      [], "", "", "", []})]
+      [], "", "", "", [], []})]
     == [True{}, False{}] : List<Bool>}
 
 law domain_to_alabel:
   {S.Mail.ascii(S.Mail{A.Mbox{"", "a@b.c"}, [A.Mbox{"Jo", "joao@exemplo-ção.br"}], [],
-      [], [], "s", "b", "", []})
+      [], [], "s", "b", "", [], []})
     == S.Mail{A.Mbox{"", "a@b.c"}, [A.Mbox{"Jo", "joao@xn--exemplo-o-s2a7b.br"}], [],
-      [], [], "s", "b", "", []} : S.Mail}
+      [], [], "s", "b", "", [], []} : S.Mail}
 
 # OAuth
 # -----
@@ -220,14 +220,14 @@ law mailbox_show:
 law rcpt_list:
   {S.Mail.rcpts(S.Mail{A.Mbox{"", "f@x.com"}, [A.Mbox{"A", "a@x.com"}],
       [A.Mbox{"", "c@x.com"}], [A.Mbox{"", "b@x.com"}, A.Mbox{"", "a@x.com"}], [],
-      "", "", "", []})
+      "", "", "", [], []})
     == ["a@x.com", "c@x.com", "b@x.com"] : List<&2, String>}
 
 # LAW: Bcc never reaches the headers; with only Bcc, To is the empty
 # group (RFC 5322 A.1.3).
 law bcc_hidden:
   {S.Smtp.text(S.Mail{A.Mbox{"", "f@x.com"}, [], [], [A.Mbox{"", "b@x.com"}], [],
-      "s", "t", "", []}, 0, "id", "=_bend_B")
+      "s", "t", "", [], []}, 0, "id", "=_bend_B")
     == "Date: Thu, 01 Jan 1970 00:00:00 +0000\r\nFrom: f@x.com\r\nTo: undisclosed-recipients:;\r\nSubject: s\r\nMessage-ID: <id@x.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 7bit\r\n\r\nt"
     : String}
 
@@ -340,3 +340,37 @@ law sink_starttls_refused:
           None{}, False{}},
         K.Step{K.Sink.init(), "501 5.5.4 STARTTLS takes no parameters\r\n", False{},
           None{}, False{}}] : List<K.Step>}
+
+# Extra headers
+# -------------
+
+# LAW: an extra header goes after Message-ID, as written when it is
+# ASCII (a URL in angle brackets must stay readable) and as encoded
+# words otherwise; a CR or LF in it cannot start another header.
+law extra_headers:
+  {S.Hdr.shows([S.Hdr{"List-Unsubscribe", "<https://x.example/u?id=1>"},
+      S.Hdr{"X-Nota", "Olá"}, S.Hdr{"X-A", "b\r\nBcc: x@y"}])
+    == "List-Unsubscribe: <https://x.example/u?id=1>\r\nX-Nota: =?UTF-8?B?T2zDoQ==?=\r\nX-A: bBcc: x@y\r\n"
+    : String}
+
+# LAW: a header the client writes itself, or with a malformed name, is
+# refused, in any letter case.
+law header_names:
+  {[S.Hdr.ok("X-Campaign"), S.Hdr.ok("List-Unsubscribe"), S.Hdr.ok("Subject"),
+    S.Hdr.ok("bcc"), S.Hdr.ok("CONTENT-TYPE"), S.Hdr.ok("X Bad"), S.Hdr.ok("X:Y"),
+    S.Hdr.ok("")]
+    == [True{}, True{}, False{}, False{}, False{}, False{}, False{}, False{}]
+    : List<Bool>}
+
+# Several messages
+# ----------------
+
+# LAW: each message's outcome is kept in order, in front of the rest,
+# and an error that ends the connection keeps the ones already sent.
+law batch_keeps_order:
+  for a: S.Sent
+  for b: S.Sent
+  for code: U32
+  for error: String
+  {S.Batch.add(a, S.Batch.add(b, S.Batch{[], code, error}))
+    == S.Batch{[a, b], code, error} : S.Batch}
