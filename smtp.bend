@@ -495,14 +495,14 @@ def Smtp.sasl.at(fits: Bool, line: String, +mech: String, resp: String,
     case True{}:
       Smtp.sasl.last(s, buf, line, mech, k)
     case False{}:
-      Smtp.talk(s, buf, "AUTH " ++ mech ++ "\r\n", 3, C.Smtp.wait(),
-        s2 => b2 => Smtp.sasl.last(s2, b2, resp ++ "\r\n", mech, k))
+      Smtp.talk(s, buf, C.Cmd.line("AUTH " ++ mech), 3, C.Smtp.wait(),
+        s2 => b2 => Smtp.sasl.last(s2, b2, C.Cmd.line(resp), mech, k))
 
 # AUTH with an initial response; past 512 octets the response follows
 # the server's 334 instead (RFC 4954 4, RFC 5321 4.5.3.1.4).
 def Smtp.sasl(+mech: String, +resp: String, s: Socket, buf: String,
   k: Socket -> String -> IO(C.Out())) -> IO(C.Out()):
-  +line = "AUTH " ++ mech ++ " " ++ resp ++ "\r\n"
+  +line = C.Cmd.line("AUTH " ++ mech ++ " " ++ resp)
   Smtp.sasl.at(Nat.is_le(String.length(line), 512n), line, mech, resp, s, buf, k)
 
 # CRAM-MD5's challenge, answered (RFC 2195 2).
@@ -510,8 +510,8 @@ def Smtp.cram(ok: Bool, r: R.Reply, +o: C.Opts, s: Socket, buf: String,
   k: Socket -> String -> IO(C.Out())) -> IO(C.Out()):
   match ok:
     case True{}:
-      Smtp.sasl.last(s, buf, C.Smtp.cram.resp(C.Opts.user(o), C.Opts.pass(o),
-        R.Reply.text(r)) ++ "\r\n", "CRAM-MD5", k)
+      Smtp.sasl.last(s, buf, C.Cmd.line(C.Smtp.cram.resp(C.Opts.user(o),
+        C.Opts.pass(o), R.Reply.text(r))), "CRAM-MD5", k)
     case False{}:
       R.Reply{code, text} = r
       Smtp.quit(s, C.Smtp.fail(code, "AUTH CRAM-MD5: " ++ text))
@@ -732,7 +732,7 @@ def Smtp.checked(problem: String, +o: C.Opts, ms: List<&2, C.Mail>) -> IO(C.Out(
 # Send the messages over one connection, as o says: one transaction
 # each, in order. Nothing is sent if any of them is malformed.
 def Smtp.send_many(+o: C.Opts, +ms: List<&2, C.Mail>) -> IO(C.Out()):
-  +bad = C.Proxy.problem(C.Opts.opt(o, "proxy"))
+  +bad = C.Opts.problem(o)
   Smtp.checked(Bool.pick(String, Bool.not(String.is_empty(bad)), bad,
     Bool.pick(String, List.is_empty(&2, C.Mail, ms), "no messages",
       C.Smtp.problems(ms))), o, C.Smtp.asciis(ms))

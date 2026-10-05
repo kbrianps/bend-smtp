@@ -224,6 +224,20 @@ out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to 
   --dkim-domain x.com --dkim-selector s --dkim-key tests/certs/ca.pem 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "cannot read the private key" <<<"$out" && ok "a bad DKIM key stops the send" || bad "bad DKIM key: $rc $out"
 
+# The library called directly, past the command line's checks (the two
+# injections found in review): refused before a connection is made.
+$BEND tests/inject.bend -o "$TMP/inject" >/dev/null 2>&1 || bad "build tests/inject.bend"
+out=$("$TMP/inject" $P2 ret 2>&1)
+grep -q "^refused: bad ret" <<<"$out" && ok "library: a DSN option with a line end is refused" || bad "inject ret: $out"
+out=$("$TMP/inject" $P2 ctype 2>&1)
+grep -q "^refused: bad attachment type" <<<"$out" && ok "library: an attachment type with a line end is refused" || bad "inject ctype: $out"
+python3 tests/server.py --port $P2 --ext DSN --log "$TMP/inj.log" --out "$TMP/inj.eml" >/dev/null 2>&1 &
+sleep 0.6
+out=$("$TMP/inject" $P2 more 2>&1)
+wait
+grep -q "^went through" <<<"$out" && grep -q "^C: MAIL FROM:<me@example.com> RET=HDRS$" "$TMP/inj.log" &&
+  ! grep -q "^C: RSET" "$TMP/inj.log" && ok "library: valid DSN options still go, one command per line" || bad "inject more: $out"
+
 # The Bend sink over TLS and STARTTLS.
 for mode in tls starttls; do
   ./sink $P2 "$TMP" $mode tests/certs/server.pem tests/certs/server.key >/dev/null & SINK=$!

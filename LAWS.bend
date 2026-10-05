@@ -565,3 +565,67 @@ law builders:
     & {S.Mail.html(S.Mail.new("Me <me@x.com>", "Ana <a@x.com>, b@y.com", "Hi", "t"), "<p>t</p>")
     == S.Mail{A.Mbox{"Me", "me@x.com"}, [A.Mbox{"Ana", "a@x.com"}, A.Mbox{"", "b@y.com"}],
       [], [], [], "Hi", "t", "<p>t</p>", [], []} : S.Mail}
+
+# The library boundary
+# --------------------
+#
+# Found by a reviewer (777genius, awesome-bend#2): the DSN options and an
+# attachment's content type reached a command line and a header as
+# given, so a caller of the library (the command line checked them)
+# could add a command or a header. These laws pin the fix.
+
+# LAW: a command's text holds no CR or LF, for every string. Every
+# command line (EHLO, MAIL, RCPT, AUTH and its responses) is built by
+# Cmd.line, so no argument or parameter can start another command.
+law command_one_line:
+  for raw: String
+  {T.Text.has_nl(S.Cmd.text(raw)) == False{} : Bool}
+
+# LAW: an attachment's type, as it goes in the header, holds no CR or
+# LF, for every string.
+law ctype_one_line:
+  for +s: String
+  {T.Text.has_nl(M.Mime.ctype.safe(s)) == False{} : Bool}
+
+# LAW: RET is FULL or HDRS or nothing: a value with a line end or a
+# space adds no command and no parameter, and even a raw parameter
+# string with a line end stays on MAIL's own line.
+law dsn_ret_strict:
+  {[S.Dsn.mail("full\r\nRSET", ""), S.Dsn.mail("full SMTPUTF8", ""), S.Dsn.mail("FuLl", ""),
+    S.Smtp.mail("a@b.c", 0, 1, False{}, False{}, S.Dsn.mail("full\r\nRSET", "")),
+    S.Smtp.mail("a@b.c", 0, 1, False{}, False{}, "\r\nRSET")]
+    == ["", "", " RET=FULL", "MAIL FROM:<a@b.c>\r\n", "MAIL FROM:<a@b.c>RSET\r\n"]
+    : List<String>}
+
+# LAW: NOTIFY is NEVER alone, or SUCCESS, FAILURE and DELAY; anything
+# else is no parameter at all.
+law dsn_notify_strict:
+  {[S.Dsn.rcpt("never\r\nRSET", "a@b.c"), S.Dsn.rcpt("success,never", "a@b.c"),
+    S.Dsn.rcpt("success ORCPT=x", "a@b.c"), S.Dsn.rcpt("Delay,success", "a@b.c"),
+    S.Dsn.rcpt("never", "a@b.c")]
+    == ["", "", "", " NOTIFY=DELAY,SUCCESS ORCPT=rfc822;a@b.c",
+      " NOTIFY=NEVER ORCPT=rfc822;a@b.c"] : List<String>}
+
+# LAW: an attachment's type is a bare type/subtype, or it is replaced:
+# a line end, a space or a parameter cannot reach the header.
+law ctype_strict:
+  {[M.Mime.ctype.safe("image/png"), M.Mime.ctype.safe("text/plain\r\nX-Injected: yes"),
+    M.Mime.ctype.safe("text/plain; charset=x"), M.Mime.ctype.safe("text"),
+    M.Mime.ctype.safe("")]
+    == ["image/png", "application/octet-stream", "application/octet-stream",
+      "application/octet-stream", "application/octet-stream"] : List<String>}
+
+# LAW: both are refused before anything is sent, with the reason.
+law boundary_problems:
+  {[S.Opts.problem(S.Opts.with(S.Opts.new("h"), "ret", "full\r\nRSET")),
+    S.Opts.problem(S.Opts.with(S.Opts.new("h"), "notify", "never,delay")),
+    S.Opts.problem(S.Opts.with(S.Opts.with(S.Opts.new("h"), "ret", "hdrs"), "notify",
+      "failure")),
+    S.Mail.problem(S.Mail.attach(S.Mail.new("a@b.c", "c@d.e", "s", "t"), "a.bin", [1]))]
+    == ["bad ret (full or hdrs)",
+      "bad notify (never, or success, failure and delay, comma-separated)", "", ""]
+    : List<String>}
+    & {S.Mail.problem(S.Mail{A.Mbox{"", "a@b.c"}, [A.Mbox{"", "c@d.e"}], [], [], [], "s",
+      "t", "", [M.Part{"a.txt", "text/plain\r\nX-Injected: yes", [1]}], []})
+    == "bad attachment type (type/subtype, with no spaces or parameters): text/plainX-Injected: yes"
+    : String}

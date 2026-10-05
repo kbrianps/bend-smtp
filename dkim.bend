@@ -227,10 +227,10 @@ def Dkim.c(relaxed: Bool) -> String:
 # hr, br: relaxed header and body forms; over: the oversigned names.
 def Dkim.tags(alg: String, hr: Bool, br: Bool, domain: String, selector: String,
   +t: U32, fs: List<&2, Field>, over: List<&2, String>, bh: String) -> String:
-  "v=1; a=" ++ alg ++ "; c=" ++ Dkim.c(hr) ++ "/" ++ Dkim.c(br) ++ "; d="
+  "v=1; a=" ++ T.Text.clean(alg) ++ "; c=" ++ Dkim.c(hr) ++ "/" ++ Dkim.c(br) ++ "; d="
     ++ T.Text.clean(domain) ++ "; s=" ++ T.Text.clean(selector) ++ ";\r\n t="
     ++ U32.show(t) ++ "; h=" ++ Dkim.names(List.append(&2, String, Dkim.named(fs), over))
-    ++ ";\r\n bh=" ++ bh ++ ";\r\n b="
+    ++ ";\r\n bh=" ++ T.Text.clean(bh) ++ ";\r\n b="
 
 def Dkim.canon(+hr: Bool, fs: List<&2, Field>) -> String:
   match fs:

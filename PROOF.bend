@@ -204,3 +204,21 @@ def Laws.dkim_simple_data():
 
 def Laws.builders():
   ({==}, {==})
+
+def Laws.command_one_line(raw):
+  Laws.clean_safe(raw)
+
+def Laws.ctype_one_line(s):
+  Laws.clean_safe(Bool.pick(String, M.Mime.ctype.ok(s), s, "application/octet-stream"))
+
+def Laws.dsn_ret_strict():
+  {==}
+
+def Laws.dsn_notify_strict():
+  {==}
+
+def Laws.ctype_strict():
+  {==}
+
+def Laws.boundary_problems():
+  ({==}, {==})

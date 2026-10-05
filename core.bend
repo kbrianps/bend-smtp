@@ -202,31 +202,49 @@ def Hdr.bad(hs: List<&2, Hdr>) -> String:
       Bool.pick(String, Hdr.ok(n), Hdr.bad(t), Bool.pick(String, String.is_empty(n),
         "(no name)", n))
 
+def Mail.files(m: Mail) -> List<&2, M.Part>:
+  Mail{_, _, _, _, _, _, _, _, files, _} = m
+  files
+
 # What is wrong with a message's addresses and headers, or "".
 def Mail.problem(+m: Mail) -> String:
   Mail{from, to, cc, bcc, reply, _, _, _, _, headers} = m
   +f = A.Mbox.addr(from)
   +b = A.Mbox.bad(to) ++ A.Mbox.bad(cc) ++ A.Mbox.bad(bcc)
   +h = Hdr.bad(headers)
+  +ct = M.Mime.ctype.bad(Mail.files(m))
   Bool.pick(String, Bool.not(A.Addr.ok(f)), "bad sender address: " ++ f,
   Bool.pick(String, List.is_empty(&2, String, Mail.rcpts(m)), "no recipients",
   Bool.pick(String, Bool.not(String.is_empty(b)), "bad recipient address: " ++ b,
   Bool.pick(String, Bool.not(String.is_empty(h)),
     "bad header (a malformed name, or one the client writes itself): " ++ h,
-    Mail.bad("Reply-To", A.Mbox.bad(reply))))))
+  Bool.pick(String, Bool.not(String.is_empty(ct)),
+    "bad attachment type (type/subtype, with no spaces or parameters): " ++ ct,
+    Mail.bad("Reply-To", A.Mbox.bad(reply)))))))
 
 # Commands
 # --------
 
+# A command's text with no CR or LF in it, whatever went in: the one
+# place every command line passes through, so that no argument (an
+# address, a name, a parameter) can end the line and start another
+# command. LAWS.bend proves it for every string.
+def Cmd.text(raw: String) -> String:
+  T.Text.clean(raw)
+
+# A command line: its text and the CRLF that ends it.
+def Cmd.line(raw: String) -> String:
+  Cmd.text(raw) ++ "\r\n"
+
 def Smtp.ehlo(name: String) -> String:
-  "EHLO " ++ T.Text.clean(name) ++ "\r\n"
+  Cmd.line("EHLO " ++ name)
 
 # LMTP's greeting (RFC 2033 4.1).
 def Smtp.lhlo(name: String) -> String:
-  "LHLO " ++ T.Text.clean(name) ++ "\r\n"
+  Cmd.line("LHLO " ++ name)
 
 def Smtp.helo(name: String) -> String:
-  "HELO " ++ T.Text.clean(name) ++ "\r\n"
+  Cmd.line("HELO " ++ name)
 
 def Smtp.size.param(+size: U32, +len: U32) -> String:
   Bool.pick(String, U32.is_zero(size), "", " SIZE=" ++ U32.show(len))
@@ -244,8 +262,8 @@ def Smtp.utf8.param(utf8: Bool, eight: Bool) -> String:
 # and SMTPUTF8 when the message needs it; more: further parameters.
 def Smtp.mail(from: String, +size: U32, +len: U32, utf8: Bool, eight: Bool,
   more: String) -> String:
-  "MAIL FROM:<" ++ T.Text.clean(from) ++ ">" ++ Smtp.size.param(size, len)
-    ++ Smtp.utf8.param(utf8, eight) ++ more ++ "\r\n"
+  Cmd.line("MAIL FROM:<" ++ from ++ ">" ++ Smtp.size.param(size, len)
+    ++ Smtp.utf8.param(utf8, eight) ++ more)
 
 def Xtext.hex(+d: U32) -> Char:
   Chr{M.Word.pick((d < 10 : U32), (d + 48 : U32), (d + 55 : U32))}
@@ -270,22 +288,69 @@ def Xtext.bytes(bs: List<&2, U32>) -> String:
 def Xtext.of(s: String) -> String:
   Xtext.bytes(M.Utf8.bytes(s))
 
+# RET's value (RFC 3461 4.3): FULL or HDRS, in any letter case; anything
+# else is no parameter at all, so a value cannot carry a space (another
+# parameter) or a line end (another command).
+def Dsn.ret(+ret: String) -> String:
+  Bool.pick(String, String.eq(String.to_upper(ret), "FULL"), " RET=FULL",
+    Bool.pick(String, String.eq(String.to_upper(ret), "HDRS"), " RET=HDRS", ""))
+
+def Dsn.words(ws: List<&2, String>) -> Bool:
+  match ws:
+    case Nil{}:
+      True{}
+    case Con{+w, t}:
+      (String.eq(w, "SUCCESS") || String.eq(w, "FAILURE") || String.eq(w, "DELAY"))
+        && Dsn.words(t)
+
+def Dsn.never(ws: List<&2, String>) -> Bool:
+  match ws:
+    case Con{w, Nil{}}:
+      String.eq(w, "NEVER")
+    case _:
+      False{}
+
+# Whether these are NOTIFY's values (RFC 3461 4.1): NEVER alone, or one
+# or more of SUCCESS, FAILURE and DELAY.
+def Dsn.notify.ok(+ws: List<&2, String>) -> Bool:
+  Dsn.never(ws) || Bool.not(List.is_empty(&2, String, ws)) && Dsn.words(ws)
+
+def Dsn.notify.of(+ws: List<&2, String>) -> String:
+  Bool.pick(String, Dsn.notify.ok(ws), " NOTIFY=" ++ String.join(ws, ","), "")
+
+# NOTIFY's parameter from a comma-separated list, in any letter case;
+# nothing unless every value is one NOTIFY takes.
+def Dsn.notify(notify: String) -> String:
+  Dsn.notify.of(String.split(String.to_upper(notify), ','))
+
 # The DSN parameters of MAIL (RFC 3461 4.3, 4.4): RET and ENVID, each
-# only when asked for.
-def Dsn.mail(+ret: String, +envid: String) -> String:
-  Bool.pick(String, String.is_empty(ret), "", " RET=" ++ String.to_upper(ret))
+# only when asked for; ENVID goes as xtext, which has no space or line
+# end.
+def Dsn.mail(ret: String, +envid: String) -> String:
+  Dsn.ret(ret)
     ++ Bool.pick(String, String.is_empty(envid), "", " ENVID=" ++ Xtext.of(envid))
 
+def Dsn.rcpt.with(+n: String, +a: String) -> String:
+  Bool.pick(String, String.is_empty(n), "",
+    n ++ Bool.pick(String, I.Idna.ascii(a), " ORCPT=rfc822;" ++ Xtext.of(a), ""))
+
 # The DSN parameters of RCPT (RFC 3461 4.1, 4.2): NOTIFY and the
-# original recipient; a non-ASCII address gets no ORCPT (it would need
-# RFC 6533's utf-8 form).
-def Dsn.rcpt(+notify: String, +a: String) -> String:
-  Bool.pick(String, String.is_empty(notify), "",
-    " NOTIFY=" ++ String.to_upper(notify)
-      ++ Bool.pick(String, I.Idna.ascii(a), " ORCPT=rfc822;" ++ Xtext.of(a), ""))
+# original recipient (as xtext); a non-ASCII address gets no ORCPT (it
+# would need RFC 6533's utf-8 form).
+def Dsn.rcpt(notify: String, a: String) -> String:
+  Dsn.rcpt.with(Dsn.notify(notify), a)
+
+# What is wrong with the DSN options, or "": a value that is given and
+# is not one the parameter takes.
+def Dsn.problem(+ret: String, +notify: String) -> String:
+  Bool.pick(String, Bool.not(String.is_empty(ret)) && String.is_empty(Dsn.ret(ret)),
+    "bad ret (full or hdrs)",
+  Bool.pick(String, Bool.not(String.is_empty(notify))
+    && String.is_empty(Dsn.notify(notify)),
+    "bad notify (never, or success, failure and delay, comma-separated)", ""))
 
 def Smtp.rcpt(to: String, more: String) -> String:
-  "RCPT TO:<" ++ T.Text.clean(to) ++ ">" ++ more ++ "\r\n"
+  Cmd.line("RCPT TO:<" ++ to ++ ">" ++ more)
 
 # CRAM-MD5's response (RFC 2195): the user, a space, and the HMAC-MD5 of
 # the server's challenge keyed by the password, in hex; all in base64.
@@ -306,7 +371,7 @@ def Smtp.plain.resp(user: String, pass: String) -> String:
 
 # AUTH PLAIN with its initial response.
 def Smtp.plain(user: String, pass: String) -> String:
-  "AUTH PLAIN " ++ Smtp.plain.resp(user, pass) ++ "\r\n"
+  Cmd.line("AUTH PLAIN " ++ Smtp.plain.resp(user, pass))
 
 # XOAUTH2's response (Google's and Microsoft's SASL XOAUTH2):
 # "user=" user ^A "auth=Bearer " token ^A ^A, in base64.
@@ -336,7 +401,7 @@ def Smtp.bearer.resp(user: String, host: String, +port: U32, token: String) ->
 
 # One AUTH LOGIN answer: the text in base64.
 def Smtp.b64.line(s: String) -> String:
-  M.B64.text(s) ++ "\r\n"
+  Cmd.line(M.B64.text(s))
 
 def Mech.has(ms: List<&2, String>, +w: String) -> Bool:
   match ms:
@@ -508,7 +573,7 @@ def Smtp.text(m: Mail, +t: U32, id: String, +b: String) -> String:
     ++ T.Text.clean(A.Addr.domain(A.Mbox.addr(from))) ++ ">\r\n"
     ++ Hdr.shows(headers)
     ++ "MIME-Version: 1.0\r\n"
-    ++ M.Mime.entity(text, html, files, b)
+    ++ M.Mime.entity(text, html, files, T.Text.clean(b))
 
 # Options
 # -------
@@ -825,6 +890,13 @@ def Proxy.named(p: Proxy) -> Bool:
 def Proxy.problem(+url: String) -> String:
   Bool.pick(String, String.is_empty(url) || Proxy.named(Proxy.of(url)), "",
     "bad proxy URL (socks5://[user:pass@]host[:port] or http://...): " ++ url)
+
+# What is wrong with the named options, or "": a proxy that cannot be
+# read, or a DSN value its parameter does not take.
+def Opts.problem(+o: Opts) -> String:
+  +p = Proxy.problem(Opts.opt(o, "proxy"))
+  Bool.pick(String, String.is_empty(p),
+    Dsn.problem(Opts.opt(o, "ret"), Opts.opt(o, "notify")), p)
 
 def Smtp.job(+m: Mail, +t: U32, +a: U32, b: U32, c: U32) -> Job:
   Job{m, Smtp.text(m, t, Hex.of(t) ++ "." ++ Hex.of(a) ++ Hex.of(b),

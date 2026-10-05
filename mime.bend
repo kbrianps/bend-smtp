@@ -4,6 +4,7 @@
 # 5322 2.1.1). The whole message comes out 7-bit ASCII, so it needs no
 # 8BITMIME or SMTPUTF8 from the server.
 import Base
+import ./text.bend as T
 
 def Word.pick(c: Bool, a: U32, b: U32) -> U32:
   match c:
@@ -437,10 +438,54 @@ def Mime.leaf.with(ctype: String, b: Body) -> String:
 def Mime.leaf(ctype: String, +s: String) -> String:
   Mime.leaf.with(ctype, Mime.body(s))
 
+# token chars (RFC 2045 5.1): printable ASCII but space and the
+# tspecials ()<>@,;:\"/[]?=.
+def Mime.token.ch(+c: U32) -> Bool:
+  (c > 32 && c < 127 : U32) && Bool.not(U32.is_eq(c, 40) || U32.is_eq(c, 41)
+    || U32.is_eq(c, 60) || U32.is_eq(c, 62) || U32.is_eq(c, 64) || U32.is_eq(c, 44)
+    || U32.is_eq(c, 59) || U32.is_eq(c, 58) || U32.is_eq(c, 92) || U32.is_eq(c, 34)
+    || U32.is_eq(c, 47) || U32.is_eq(c, 91) || U32.is_eq(c, 93) || U32.is_eq(c, 63)
+    || U32.is_eq(c, 61))
+
+def Mime.token(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{Chr{c}, t}:
+      Mime.token.ch(c) && Mime.token(t)
+
+def Mime.ctype.parts(ps: List<&2, String>) -> Bool:
+  match ps:
+    case Con{+a, Con{+b, Nil{}}}:
+      Bool.not(String.is_empty(a)) && Bool.not(String.is_empty(b)) && Mime.token(a)
+        && Mime.token(b)
+    case _:
+      False{}
+
+# Whether s is a bare content type, "type/subtype" in tokens: no
+# parameters, no spaces, nothing that could end the header line.
+def Mime.ctype.ok(s: String) -> Bool:
+  Mime.ctype.parts(String.split(s, '/'))
+
+# The type as it goes in the header: itself when it is a bare content
+# type, else application/octet-stream; and no CR or LF either way.
+def Mime.ctype.safe(+s: String) -> String:
+  T.Text.clean(Bool.pick(String, Mime.ctype.ok(s), s, "application/octet-stream"))
+
+# The first attachment type that is not a bare content type, or "".
+def Mime.ctype.bad(fs: List<&2, Part>) -> String:
+  match fs:
+    case Nil{}:
+      ""
+    case Con{f, t}:
+      Part{_, +ctype, _} = f
+      Bool.pick(String, Mime.ctype.ok(ctype), Mime.ctype.bad(t),
+        Bool.pick(String, String.is_empty(ctype), "(empty)", T.Text.clean(ctype)))
+
 # An attachment leaf, always base64, in front of rest.
 def Mime.attach(p: Part, rest: String) -> String:
   Part{+name, ctype, data} = p
-  "Content-Type: " ++ ctype ++ Mime.param("name", name) ++ "\r\n"
+  "Content-Type: " ++ Mime.ctype.safe(ctype) ++ Mime.param("name", name) ++ "\r\n"
     ++ "Content-Disposition: attachment" ++ Mime.param("filename", name) ++ "\r\n"
     ++ "Content-Transfer-Encoding: base64\r\n\r\n" ++ B64.lines(data, "\r\n" ++ rest)
 
