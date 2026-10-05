@@ -19,7 +19,7 @@ Cliente SMTP em [Bend 2](https://github.com/bendlang/bend), com TLS, e um servid
     ./sink PORT DIR tls CERT KEY             # TLS implícito
     ./sink PORT DIR starttls CERT KEY        # STARTTLS, exigido antes do MAIL
 
-    ./test.sh                                # leis + 84 checagens (BEND=caminho do bend)
+    ./test.sh                                # leis + 87 checagens (BEND=caminho do bend)
 
 Opções do `send`:
 - **destinatários:** `--to`, `--cc`, `--bcc` e `--reply-to` aceitam listas como se escreve (`"Silva, Ana" <ana@x.com>, bia@y.com`). Bcc recebe o RCPT mas nunca aparece no cabeçalho; endereço repetido recebe um RCPT só
@@ -34,7 +34,9 @@ Opções do `send`:
 
 Saída: 0 entregue a todos; 3 entregue em parte (um destinatário recusado, ou só algumas das mensagens); 1 nada enviado; 2 uso errado.
 
-No hub do Bend: `import 0xfd64aefef43747d3eaeea50c10a112e5/core.bend as C` e `import 0xfd64aefef43747d3eaeea50c10a112e5/smtp.bend as S`.
+No hub do Bend: `import 0x00e7af2de246c3a4c341d9ee49e68747/core.bend as C` e `import 0x00e7af2de246c3a4c341d9ee49e68747/smtp.bend as S`.
+
+O primeiro pacote publicado (`0xfd64aefe…`) continua no hub, que é permanente, e tem duas injeções na borda da biblioteca (opções de DSN e tipo de anexo); use o hash acima.
 
 Como biblioteca, o ponto de entrada é `Smtp.send_many(opts, mensagens)` em `smtp.bend`, com os tipos e construtores (`Opts.new`, `Mail.new`...) em `core.bend` (ou `Smtp.send_mail` para uma só): devolve um `Batch` com o resultado de cada mensagem, na ordem, e o erro que encerrou a conexão, se houve.
 
