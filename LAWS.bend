@@ -551,3 +551,17 @@ law refusal_kept:
   {S.Batch.first(x, S.Batch{[], code, error}) == S.Batch{[x], code, error} : S.Batch}
     & {S.Batch.first(x, S.Batch{[y], code, error}) == S.Batch{[y], code, error}
       : S.Batch}
+
+# The short way
+# -------------
+
+# LAW: the builders give the usual submission (STARTTLS on 587, the
+# mechanism picked from the offers) and a message read as people write
+# it; each further step changes only what it names.
+law builders:
+  {[S.Opts.login(S.Opts.new("mx.example"), "u", "p")]
+    == [S.Opts{"mx.example", 587, S.StartTls{}, "", "", "u", "p", S.AAuto{}, "", False{},
+      []}] : List<S.Opts>}
+    & {S.Mail.html(S.Mail.new("Me <me@x.com>", "Ana <a@x.com>, b@y.com", "Hi", "t"), "<p>t</p>")
+    == S.Mail{A.Mbox{"Me", "me@x.com"}, [A.Mbox{"Ana", "a@x.com"}, A.Mbox{"", "b@y.com"}],
+      [], [], [], "Hi", "t", "<p>t</p>", [], []} : S.Mail}

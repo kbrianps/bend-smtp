@@ -201,3 +201,6 @@ def Laws.dkim_simple():
 
 def Laws.dkim_simple_data():
   {==}
+
+def Laws.builders():
+  ({==}, {==})

@@ -588,6 +588,72 @@ def Opts.opt(o: Opts, k: String) -> String:
 def Opts.on(o: Opts, k: String) -> Bool:
   Bool.not(String.is_empty(Opts.opt(o, k)))
 
+# Building blocks
+# ---------------
+#
+# The short way to say where and what:
+#
+#   Smtp.send_mail(Opts.login(Opts.new("smtp.example.com"), "me@example.com", pass),
+#     Mail.new("Me <me@example.com>", "Ana <ana@x.com>, b@y.com", "Hi", "text"))
+
+# The usual submission: STARTTLS on port 587, the system's trust store,
+# no AUTH yet.
+def Opts.new(host: String) -> Opts:
+  Opts{host, 587, StartTls{}, "", "", "", "", AAuto{}, "", False{}, Nil{}}
+
+# o with this port and mode (Tls{} for implicit TLS on 465, Plain{} for
+# none).
+def Opts.via(o: Opts, port: U32, mode: Mode) -> Opts:
+  Opts{host, _, _, cafile, helo, user, pass, auth, token, debug, more} = o
+  Opts{host, port, mode, cafile, helo, user, pass, auth, token, debug, more}
+
+# o with a user and password; the mechanism is picked from the server's
+# offers.
+def Opts.login(o: Opts, user: String, pass: String) -> Opts:
+  Opts{host, port, mode, cafile, helo, _, _, auth, token, debug, more} = o
+  Opts{host, port, mode, cafile, helo, user, pass, auth, token, debug, more}
+
+# o with a user and an OAuth 2 access token (XOAUTH2 or OAUTHBEARER).
+def Opts.oauth(o: Opts, user: String, token: String) -> Opts:
+  Opts{host, port, mode, cafile, helo, _, pass, auth, _, debug, more} = o
+  Opts{host, port, mode, cafile, helo, user, pass, auth, token, debug, more}
+
+# o with a named option set (see Opts): Opts.with(o, "proxy", "socks5://...").
+def Opts.with(o: Opts, key: String, val: String) -> Opts:
+  Opts{host, port, mode, cafile, helo, user, pass, auth, token, debug, more} = o
+  Opts{host, port, mode, cafile, helo, user, pass, auth, token, debug,
+    List.append(&2, Kv, more, [Kv{key, val}])}
+
+# A plain-text message; from is one mailbox and to a list, both as people
+# write them ("Name <addr>", comma-separated).
+def Mail.new(from: String, to: String, subject: String, text: String) -> Mail:
+  Mail{A.Mbox.parse(from), A.Mbox.list(to), Nil{}, Nil{}, Nil{}, subject, text, "",
+    Nil{}, Nil{}}
+
+# m with an HTML alternative to its text.
+def Mail.html(m: Mail, html: String) -> Mail:
+  Mail{from, to, cc, bcc, reply, subject, text, _, files, headers} = m
+  Mail{from, to, cc, bcc, reply, subject, text, html, files, headers}
+
+# m with these Cc and Bcc lists (as people write them).
+def Mail.copy(m: Mail, cc: String, bcc: String) -> Mail:
+  Mail{from, to, _, _, reply, subject, text, html, files, headers} = m
+  Mail{from, to, A.Mbox.list(cc), A.Mbox.list(bcc), reply, subject, text, html, files,
+    headers}
+
+# m with one more attachment: a file name, its bytes, and a type guessed
+# from the name.
+def Mail.attach(m: Mail, +name: String, data: List<&2, U32>) -> Mail:
+  Mail{from, to, cc, bcc, reply, subject, text, html, files, headers} = m
+  Mail{from, to, cc, bcc, reply, subject, text, html,
+    List.append(&2, M.Part, files, [M.Part{name, M.Mime.ctype(name), data}]), headers}
+
+# m with one more header field.
+def Mail.header(m: Mail, name: String, value: String) -> Mail:
+  Mail{from, to, cc, bcc, reply, subject, text, html, files, headers} = m
+  Mail{from, to, cc, bcc, reply, subject, text, html, files,
+    List.append(&2, Hdr, headers, [Hdr{name, value}])}
+
 # IO
 # --
 
