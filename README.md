@@ -1,4 +1,4 @@
-# bend-smtp (nome provisório)
+# bend-smtp
 
 Cliente SMTP em [Bend 2](https://github.com/bendlang/bend), com TLS, e um servidor de teste que só grava as mensagens. Responde à issue [lilalittle/bend-packages#42](https://github.com/lilalittle/bend-packages/issues/42).
 
