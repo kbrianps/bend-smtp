@@ -136,7 +136,9 @@ grep -q "^C: MAIL FROM:<me@example.com> RET=HDRS ENVID=id+2B1" "$TMP/DSN paramet
   ok "RET, ENVID, NOTIFY and ORCPT sent" || bad "DSN lines"
 case_ "DSN not offered, not sent" "" "^sent" --tls plain --notify never
 grep -q "NOTIFY" "$TMP/DSN not offered, not sent.log" && bad "NOTIFY without DSN" || ok "no DSN parameter without DSN"
-case_ "CHUNKING"                "--ext CHUNKING" "^sent" --tls plain --chunking --body $'a\n.b'
+case_ "CHUNKING"                "--ext CHUNKING" "^sent" --tls plain --chunking --body $'corpo-do-bdat\n.b' --debug
+out=$(cat "$TMP/last.out")
+grep -q "corpo-do-bdat" <<<"$out" && bad "the trace shows a BDAT message" || ok "the trace hides a BDAT message too"
 grep -q "^C: BDAT [0-9]* LAST" "$TMP/CHUNKING.log" && grep -q "^\.b" "$TMP/CHUNKING.eml" &&
   ok "BDAT carries the message unstuffed" || bad "BDAT"
 case_ "LMTP"                    "--lmtp --reject-final b@x.com" "^  b@x.com (550 5.2.2 mailbox full)" \
@@ -161,6 +163,21 @@ out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to 
 wait $PROXY
 grep -q "the proxy refused the user and password" <<<"$out" && ok "SOCKS5 wrong password" || bad "socks auth: $out"
 
+python3 tests/httpproxy.py $P3 "$TMP/http.log" "zé" "s:e@nha" >/dev/null 2>&1 & PROXY=$!
+case_ "HTTP CONNECT proxy with a password" "--mode tls" "^sent" --tls tls --proxy "http://zé:s:e@nha@127.0.0.1:$P3"
+wait $PROXY
+grep -q "^CONNECT localhost:$P2" "$TMP/http.log" && grep -q "^auth ok" "$TMP/http.log" &&
+  ok "the tunnel names the host, with Basic credentials" || bad "http proxy: $(cat "$TMP/http.log")"
+python3 tests/httpproxy.py $P3 "$TMP/http2.log" u p >/dev/null 2>&1 & PROXY=$!
+sleep 0.4
+out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to a@example.com --body x \
+  --proxy "http://u:wrong@127.0.0.1:$P3" 2>&1)
+wait $PROXY
+grep -q "(407)" <<<"$out" && ok "HTTP proxy wrong password" || bad "http proxy auth: $out"
+out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to a@example.com --body x \
+  --proxy "https://127.0.0.1:$P3" 2>&1); rc=$?
+[ $rc -eq 2 ] && grep -q "bad proxy URL" <<<"$out" && ok "an unreadable proxy URL is an error, not a direct connection" || bad "bad proxy: $rc $out"
+
 # DKIM: RSA and Ed25519, checked by tests/dkim_verify.py.
 for k in rsa ed; do
   case_ "DKIM $k" "" "^sent" --tls plain --from "Zé <me@example.com>" --subject "Relatório — câmeras" \
@@ -180,6 +197,29 @@ python3 tests/dkim_verify.py "$TMP/tampered.eml" tests/certs/dkim-rsa.key 2>/dev
   bad "a tampered subject still verifies" || ok "a tampered subject fails"
 python3 tests/dkim_verify.py "$TMP/relayed.eml" tests/certs/dkim-rsa.key &&
   ok "spacing changed by a relay still verifies" || bad "relaxed canonicalization"
+for c in relaxed/simple simple/relaxed simple/simple; do
+  n="DKIM ${c/\// and }"
+  case_ "$n" "" "^sent" --tls plain --subject "Olá  mundo" --body $'a  b  \n\n.c\n\n' \
+    --dkim-domain example.com --dkim-selector s1 --dkim-key tests/certs/dkim-rsa.key --dkim-canon $c
+  grep -q "c=$c;" "$TMP/$n.eml" && python3 tests/dkim_verify.py "$TMP/$n.eml" tests/certs/dkim-rsa.key &&
+    ok "$n signature verifies" || bad "$n signature"
+done
+# Oversigning: a Subject added on the way breaks the signature; without
+# it, the added one goes unnoticed (the verifier reads the last one).
+python3 - "$TMP/DKIM rsa.eml" "$TMP/added.eml" <<'PY'
+import sys
+open(sys.argv[2], "wb").write(b"Subject: outro assunto\r\n" + open(sys.argv[1], "rb").read())
+PY
+python3 tests/dkim_verify.py "$TMP/added.eml" tests/certs/dkim-rsa.key 2>/dev/null &&
+  bad "an added Subject still verifies" || ok "oversigning: an added Subject fails"
+case_ "DKIM without oversigning" "" "^sent" --tls plain --dkim-no-oversign \
+  --dkim-domain example.com --dkim-selector s1 --dkim-key tests/certs/dkim-rsa.key
+python3 - "$TMP/DKIM without oversigning.eml" "$TMP/added2.eml" <<'PY'
+import sys
+open(sys.argv[2], "wb").write(b"Subject: outro assunto\r\n" + open(sys.argv[1], "rb").read())
+PY
+python3 tests/dkim_verify.py "$TMP/added2.eml" tests/certs/dkim-rsa.key &&
+  ok "without it, the same addition passes (the option does what it says)" || bad "no-oversign"
 out=$(./send --host localhost --port $P2 --tls plain --from me@example.com --to a@example.com --body x \
   --dkim-domain x.com --dkim-selector s --dkim-key tests/certs/ca.pem 2>&1); rc=$?
 [ $rc -eq 1 ] && grep -q "cannot read the private key" <<<"$out" && ok "a bad DKIM key stops the send" || bad "bad DKIM key: $rc $out"

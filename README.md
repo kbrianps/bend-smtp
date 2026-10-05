@@ -17,7 +17,7 @@ Cliente SMTP em [Bend 2](https://github.com/bendlang/bend), com TLS, e um servid
     ./sink PORT DIR tls CERT KEY             # TLS implícito
     ./sink PORT DIR starttls CERT KEY        # STARTTLS, exigido antes do MAIL
 
-    ./test.sh                                # leis + 70 checagens (BEND=caminho do bend)
+    ./test.sh                                # leis + 83 checagens (BEND=caminho do bend)
 
 Opções do `send`:
 - **destinatários:** `--to`, `--cc`, `--bcc` e `--reply-to` aceitam listas como se escreve (`"Silva, Ana" <ana@x.com>, bia@y.com`). Bcc recebe o RCPT mas nunca aparece no cabeçalho; endereço repetido recebe um RCPT só
@@ -25,9 +25,9 @@ Opções do `send`:
 - **cabeçalhos próprios:** `--header "Nome: valor"` (repete). Os que o cliente já escreve (Subject, From, Content-Type...) são recusados
 - **uma mensagem por destinatário:** `--individually` manda uma cópia para cada `--to`, cada um vendo só a si, todas na mesma conexão
 - **depuração:** `--debug` mostra a conversa (`C:`/`S:`) no stderr, com credenciais como `(secret)` e o corpo só como tamanho
-- **DKIM:** `--dkim-domain D --dkim-selector S --dkim-key chave.pem` assina a mensagem (RSA ou Ed25519, relaxed/relaxed). Chave que não abre ou não assina interrompe o envio
+- **DKIM:** `--dkim-domain D --dkim-selector S --dkim-key chave.pem` assina a mensagem (RSA ou Ed25519). `--dkim-canon` escolhe a forma do cabeçalho e do corpo (`relaxed/relaxed` é o padrão; também `relaxed/simple`, `simple/relaxed`, `simple/simple`). From, To, Cc, Subject, Date, Reply-To e Message-ID são sobreassinados, para que um cabeçalho acrescentado no caminho quebre a assinatura (`--dkim-no-oversign` desliga). Chave que não abre ou não assina interrompe o envio
 - **aviso de entrega (DSN):** `--notify never|success,failure,delay`, `--ret full|hdrs`, `--envid ID`; só vai se o servidor anuncia DSN
-- **conexão:** `--tls starttls` (padrão, porta 587), `tls` (implícito, 465) ou `plain` (25); `--port`; `--cafile` (confiar numa CA própria); `--cert`/`--key` (certificado de cliente); `--proxy socks5://[usuário:senha@]host:porta`; `--lmtp`; `--helo`. PIPELINING é usado sozinho quando o servidor anuncia (`--no-pipelining` desliga); `--chunking` manda por BDAT quando anunciado
+- **conexão:** `--tls starttls` (padrão, porta 587), `tls` (implícito, 465) ou `plain` (25); `--port`; `--cafile` (confiar numa CA própria); `--cert`/`--key` (certificado de cliente); `--proxy socks5://[usuário:senha@]host[:porta]` ou `http://...` (HTTP CONNECT); uma URL de proxy que não dá para ler é erro, nunca conexão direta; `--lmtp`; `--helo`. PIPELINING é usado sozinho quando o servidor anuncia (`--no-pipelining` desliga); `--chunking` manda por BDAT quando anunciado
 - **AUTH:** `--user` e `--auth plain|login|cram-md5|xoauth2|oauthbearer` (sem `--auth`, escolhe pelo que o servidor oferece: OAuth se houver token, senão PLAIN, LOGIN, CRAM-MD5). Segredos só pelo ambiente: `SMTP_PASSWORD` ou `SMTP_OAUTH_TOKEN`
 
 Saída: 0 entregue a todos; 3 entregue em parte (um destinatário recusado, ou só algumas das mensagens); 1 nada enviado; 2 uso errado.
@@ -56,7 +56,8 @@ Só funciona no build nativo (`-o send`): o Bend também roda programas em JS (`
 | 2033 LMTP | `LHLO` e uma resposta final por destinatário |
 | 2195 CRAM-MD5 | MD5 e HMAC-MD5 em Bend puro, com os vetores das RFCs 1321 e 2195 nas leis; só sob TLS |
 | 1928 / 1929 SOCKS5 | o destino vai como nome (o proxy resolve o DNS); usuário e senha opcionais |
-| 6376 / 8463 DKIM | relaxed/relaxed, rsa-sha256 ou ed25519-sha256; todos os cabeçalhos da mensagem assinados; exemplo da RFC nas leis; verificado nos testes por uma implementação independente (e pelo dkimpy, se instalado) |
+| 9110 9.3.6 CONNECT | túnel por proxy HTTP, com credenciais Basic (RFC 7617) opcionais |
+| 6376 / 8463 DKIM | formas relaxed e simple, rsa-sha256 ou ed25519-sha256; todos os cabeçalhos da mensagem assinados, os principais sobreassinados (5.4); exemplo da RFC nas leis; verificado nos testes por uma implementação independente (e pelo dkimpy, se instalado) |
 | 4648 base64 | vetores oficiais nas leis |
 | 6531 / 6532 SMTPUTF8 | endereço com acento na parte local vai com `SMTPUTF8` (e `BODY=8BITMIME` quando há); servidor sem a extensão recebe recusa antes do MAIL |
 | 3492 / 5890 punycode | domínio com acento vira A-label (`xn--...`), e a mensagem continua ASCII |
@@ -74,17 +75,20 @@ Sem endereço com acento na parte local, a mensagem sai toda em 7 bits e não de
 - `md5.bend`: MD5 e HMAC-MD5 (só para CRAM-MD5); `dkim.bend`: canonicalização e o campo DKIM-Signature
 - `LAWS.bend` / `PROOF.bend`: leis e provas
 - `tests/certs/`: CA, certificados de servidor e de cliente e chaves DKIM **só de teste** (chaves privadas inclusas de propósito)
-- `tests/socks.py`: proxy SOCKS5 de teste; `tests/dkim_verify.py`: verificador de DKIM
+- `tests/socks.py` e `tests/httpproxy.py`: proxies de teste; `tests/dkim_verify.py`: verificador de DKIM
 
 ## Desempenho
 
 Strings no Bend são listas encadeadas, então um anexo ocupa uns 55 bytes de RAM por byte: 10 MB levam ~1 s e ~570 MB. Tudo que percorre a mensagem é recursão de cauda (uma recursão aninhada custaria um quadro por caractere: 700 MB a mais em 2 MB de anexo).
 
+## Deixado de fora de propósito
+
+- a tag `l=` do DKIM (assinar só o começo do corpo): deixa qualquer um acrescentar conteúdo a uma mensagem assinada (RFC 6376 8.2)
+- proxy `https://` (TLS até o proxy): recusado com erro
+
 ## Falta
 
 - [ ] obter e renovar o token OAuth (o `send` usa um token de acesso pronto)
-- [ ] DKIM com corpo `simple` e com a tag `l=`; sobreassinatura de cabeçalhos
-- [ ] proxy HTTP CONNECT (só SOCKS5)
 - [ ] BINARYMIME e BDAT em vários pedaços (vai um pedaço só)
 
 - [ ] o mapeamento completo do IDNA2008 (normalização Unicode, maiúsculas fora do ASCII): o domínio é convertido como foi escrito
