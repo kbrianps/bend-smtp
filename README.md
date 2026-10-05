@@ -6,8 +6,8 @@ An SMTP client written in [Bend 2](https://github.com/bendlang/bend): TLS, OAuth
 
 ```python
 import Base
-import ./core.bend as C
-import ./smtp.bend as S
+import 0xfd64aefef43747d3eaeea50c10a112e5/core.bend as C
+import 0xfd64aefef43747d3eaeea50c10a112e5/smtp.bend as S
 
 def main() -> IO(Unit):
   do IO<Unit>:
@@ -18,7 +18,7 @@ def main() -> IO(Unit):
     IO.print("done")
 ```
 
-A complete program is in [`examples/hello.bend`](examples/hello.bend). There is also a command line:
+Those two lines fetch the package from the Bend hub (or clone this repository and import `./core.bend` and `./smtp.bend`). A complete program is in [`examples/hello.bend`](examples/hello.bend). There is also a command line:
 
     bend send.bend -o send
     SMTP_PASSWORD=... ./send --host smtp.gmail.com --user me@gmail.com \

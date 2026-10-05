@@ -34,6 +34,8 @@ Opções do `send`:
 
 Saída: 0 entregue a todos; 3 entregue em parte (um destinatário recusado, ou só algumas das mensagens); 1 nada enviado; 2 uso errado.
 
+No hub do Bend: `import 0xfd64aefef43747d3eaeea50c10a112e5/core.bend as C` e `import 0xfd64aefef43747d3eaeea50c10a112e5/smtp.bend as S`.
+
 Como biblioteca, o ponto de entrada é `Smtp.send_many(opts, mensagens)` em `smtp.bend`, com os tipos e construtores (`Opts.new`, `Mail.new`...) em `core.bend` (ou `Smtp.send_mail` para uma só): devolve um `Batch` com o resultado de cada mensagem, na ordem, e o erro que encerrou a conexão, se houve.
 
 Testado com o Bend 2.0.35 (o lado C do Bend não tem ABI estável entre versões). Só funciona no build nativo (`-o send`): o Bend também roda programas em JS (`bend send.bend` sem `-o`), mas a rede e o TLS aqui são efeitos em C, e o lado JS responde "não suportado".
