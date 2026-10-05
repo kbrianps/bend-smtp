@@ -19,7 +19,7 @@ Cliente SMTP em [Bend 2](https://github.com/bendlang/bend), com TLS, e um servid
     ./sink PORT DIR tls CERT KEY             # TLS implícito
     ./sink PORT DIR starttls CERT KEY        # STARTTLS, exigido antes do MAIL
 
-    ./test.sh                                # leis + 83 checagens (BEND=caminho do bend)
+    ./test.sh                                # leis + 84 checagens (BEND=caminho do bend)
 
 Opções do `send`:
 - **destinatários:** `--to`, `--cc`, `--bcc` e `--reply-to` aceitam listas como se escreve (`"Silva, Ana" <ana@x.com>, bia@y.com`). Bcc recebe o RCPT mas nunca aparece no cabeçalho; endereço repetido recebe um RCPT só
@@ -34,9 +34,9 @@ Opções do `send`:
 
 Saída: 0 entregue a todos; 3 entregue em parte (um destinatário recusado, ou só algumas das mensagens); 1 nada enviado; 2 uso errado.
 
-Como biblioteca, o ponto de entrada é `Smtp.send_many(opts, mensagens)` em `smtp.bend` (ou `Smtp.send_mail` para uma só): devolve um `Batch` com o resultado de cada mensagem, na ordem, e o erro que encerrou a conexão, se houve.
+Como biblioteca, o ponto de entrada é `Smtp.send_many(opts, mensagens)` em `smtp.bend`, com os tipos e construtores (`Opts.new`, `Mail.new`...) em `core.bend` (ou `Smtp.send_mail` para uma só): devolve um `Batch` com o resultado de cada mensagem, na ordem, e o erro que encerrou a conexão, se houve.
 
-Só funciona no build nativo (`-o send`): o Bend também roda programas em JS (`bend send.bend` sem `-o`), mas a rede e o TLS aqui são efeitos em C, e o lado JS responde "não suportado".
+Testado com o Bend 2.0.35 (o lado C do Bend não tem ABI estável entre versões). Só funciona no build nativo (`-o send`): o Bend também roda programas em JS (`bend send.bend` sem `-o`), mas a rede e o TLS aqui são efeitos em C, e o lado JS responde "não suportado".
 
 ## RFCs
 
@@ -70,7 +70,7 @@ Sem endereço com acento na parte local, a mensagem sai toda em 7 bits e não de
 
 - `net.c` / `net.bend`: conexão com DNS (IPv4 e IPv6), TLS que pode começar no meio da conversa, envio, leitura com prazo
 - `text.bend`, `reply.bend`, `mime.bend`: linhas, respostas, base64 (ida e volta), UTF-8, Date, RFC 2047, corpo, multipart, anexos
-- `smtp.bend`: o cliente; `send.bend`: a linha de comando
+- `core.bend`: o núcleo puro (`Opts.*`, `Mail.*`, comandos, plano de envio, resultado); `smtp.bend`: o diálogo pela rede (`Smtp.send_mail`, `Smtp.send_many`); `send.bend`: a linha de comando
 - `idna.bend`: punycode e A-labels
 - `addr.bend`: endereços, mailboxes com nome, leitura e escrita de listas
 - `sink.bend`: o servidor de teste (máquina de estados pura, com TLS e STARTTLS); `tests/server.py`: servidor de teste roteirizável (AUTH, recusas, injeção, SMTPUTF8)

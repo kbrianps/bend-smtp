@@ -9,26 +9,11 @@
 # Not done, on purpose: the l= tag (a body length), which lets anyone
 # append to a signed message (RFC 6376 8.2).
 #
-# The pure part (canonical forms, the field) is what LAWS.bend pins; the
-# hash and the signature come from OpenSSL (net.c).
+# This file is the pure part (canonical forms, the field), which
+# LAWS.bend pins; the hash and the signature come from OpenSSL, as
+# Dkim.sha256, Dkim.alg and Dkim.sign in net.bend.
 import Base
 import ./text.bend as T
-
-# The SHA-256 of a text's bytes, in base64.
-def Dkim.sha256(data: String) -> IO(Result<&1, &1, U32 & String, String>):
-  import "./net.c"
-  import "./net.js"
-
-# "rsa-sha256" or "ed25519-sha256", by the kind of the PEM private key.
-def Dkim.alg(keyfile: String) -> IO(Result<&1, &1, U32 & String, String>):
-  import "./net.c"
-  import "./net.js"
-
-# The signature of a text's bytes with the PEM private key, in base64.
-def Dkim.sign(keyfile: String, data: String) ->
-  IO(Result<&1, &1, U32 & String, String>):
-  import "./net.c"
-  import "./net.js"
 
 # A header field: its name and its value as written (folds included).
 type Field is Data:

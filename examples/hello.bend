@@ -3,20 +3,21 @@
 #   bend examples/hello.bend -o hello
 #   SMTP_PASSWORD=... ./hello smtp.example.com me@example.com you@example.com
 import Base
+import ../core.bend as C
 import ../smtp.bend as S
 
-def Hello.say(b: S.Batch) -> IO(Unit):
-  S.Batch{sent, code, +error} = b
+def Hello.say(b: C.Batch) -> IO(Unit):
+  C.Batch{sent, code, +error} = b
   IO.print(Bool.pick(String, String.is_empty(error), "sent to "
-    ++ Nat.show(List.length(&2, S.Sent, sent)) ++ " message(s)",
+    ++ Nat.show(List.length(&2, C.Sent, sent)) ++ " message(s)",
     "failed (" ++ U32.show(code) ++ "): " ++ error))
 
 def Hello.send(args: List<String>, pass: String) -> IO(Unit):
   match args:
-    case Con{host, Con{+from, Con{to, Nil{}}}}:
+    case Con{_, Con{host, Con{+from, Con{to, Nil{}}}}}:
       do IO<Unit>:
-        b : S.Batch <- S.Smtp.send_mail(S.Opts.login(S.Opts.new(host), from, pass),
-          S.Mail.html(S.Mail.new(from, to, "Hello from Bend 2", "It works."),
+        b : C.Batch <- S.Smtp.send_mail(C.Opts.login(C.Opts.new(host), from, pass),
+          C.Mail.html(C.Mail.new(from, to, "Hello from Bend 2", "It works."),
             "<p>It <b>works</b>.</p>"))
         Hello.say(b)
     case _:

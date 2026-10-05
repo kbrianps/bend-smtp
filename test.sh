@@ -12,7 +12,7 @@ trap 'kill $SINK 2>/dev/null; rm -rf "$TMP"' EXIT
 ok()   { echo "ok: $1"; }
 bad()  { echo "FAIL: $1"; FAILS=$((FAILS + 1)); }
 
-$BEND PROOF.bend 2>&1 | grep -q "All terms check." && ok "laws proven" || bad "laws"
+$BEND PROOF.bend 2>&1 | grep -q "ALL PROOFS CHECK" && ok "laws proven" || bad "laws"
 $BEND send.bend -o send >/dev/null 2>&1 || { echo "build send failed"; exit 1; }
 $BEND sink.bend -o sink >/dev/null 2>&1 || { echo "build sink failed"; exit 1; }
 

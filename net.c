@@ -9,8 +9,8 @@
 //
 // bend links no OpenSSL, so libssl is opened at run time (dlopen) on the
 // first Net.tls; a program that never asks for TLS never touches it.
-// bend defines CID_X only for the effects a program uses, so each one
-// registers under #ifdef.
+// An effect a program does not use has no id, so each one registers
+// under an #ifdef of its id.
 // Certificates are verified (chain and host name) against the system's
 // trust store, or against a CA file the caller names.
 
@@ -304,8 +304,8 @@ Term net_connect_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_connect_use(void) {
-#ifdef CID_NET_CONNECT
-  io_eff(CID_NET_CONNECT, net_connect_run, 0);
+#ifdef CID(Net.connect)
+  io_eff(CID(Net.connect), net_connect_run, 0);
 #endif
 }
 
@@ -559,8 +559,8 @@ Term net_connect_via_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_connect_via_use(void) {
-#ifdef CID_NET_CONNECT_VIA
-  io_eff(CID_NET_CONNECT_VIA, net_connect_via_run, 0);
+#ifdef CID(Net.connect_via)
+  io_eff(CID(Net.connect_via), net_connect_via_run, 0);
 #endif
 }
 
@@ -589,7 +589,7 @@ static Term net_tls_more(Env e, IoWork* w) {
     if (net_dbg) {
       fprintf(stderr, "* TLS on\n");
     }
-    return net_tls_end(e, w, io_done(e, term_pak(CID_UNIT, 0)));
+    return net_tls_end(e, w, io_done(e, term_pak(CID(Unit), 0)));
   }
   int k = net_ssl.get_error(t->ssl, r);
   u64 at = (u64)w->made;
@@ -680,8 +680,8 @@ Term net_tls_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_tls_use(void) {
-#ifdef CID_NET_TLS
-  io_eff(CID_NET_TLS, net_tls_run, 0);
+#ifdef CID(Net.tls)
+  io_eff(CID(Net.tls), net_tls_run, 0);
 #endif
 }
 
@@ -739,8 +739,8 @@ Term net_tls_accept_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_tls_accept_use(void) {
-#ifdef CID_NET_TLS_ACCEPT
-  io_eff(CID_NET_TLS_ACCEPT, net_tls_accept_run, 0);
+#ifdef CID(Net.tls_accept)
+  io_eff(CID(Net.tls_accept), net_tls_accept_run, 0);
 #endif
 }
 
@@ -778,7 +778,7 @@ static Term net_send_more(Env e, IoWork* w) {
     w->text = k == NET_SYSCALL ? NULL : (char*)net_why(t->ssl, "tls send");
   }
   Term r = w->code != 0 ? io_fail(e, w->code, w->text)
-    : io_done(e, term_pak(CID_UNIT, 0));
+    : io_done(e, term_pak(CID(Unit), 0));
   free(w->data);
   return io_tup(e, io_hand(w->hand), r);
 }
@@ -794,8 +794,8 @@ Term net_send_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_send_use(void) {
-#ifdef CID_NET_SEND
-  io_eff(CID_NET_SEND, net_send_run, 0);
+#ifdef CID(Net.send)
+  io_eff(CID(Net.send), net_send_run, 0);
 #endif
 }
 
@@ -815,7 +815,7 @@ static Term net_poll_some(Env e, IoWork* w, u64 n) {
     net_dbg_lines("S: ", w->data, n, 1);
   }
   return net_poll_end(e, w, io_done(e,
-    io_box(e, CID_SOME, io_str(e, w->data, n))));
+    io_box(e, CID(Some), io_str(e, w->data, n))));
 }
 
 static Term net_poll_more(Env e, IoWork* w) {
@@ -848,7 +848,7 @@ static Term net_poll_more(Env e, IoWork* w) {
     ev = k == NET_WANT_READ ? POLLIN : POLLOUT;
   }
   if (io_tick() >= at) {
-    return net_poll_end(e, w, io_done(e, term_pak(CID_NONE, 0)));
+    return net_poll_end(e, w, io_done(e, term_pak(CID(None), 0)));
   }
   return io_wait_on(w, fd, ev, at, net_poll_more);
 }
@@ -862,8 +862,8 @@ Term net_poll_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_poll_use(void) {
-#ifdef CID_NET_POLL
-  io_eff(CID_NET_POLL, net_poll_run, 0);
+#ifdef CID(Net.poll)
+  io_eff(CID(Net.poll), net_poll_run, 0);
 #endif
 }
 
@@ -879,12 +879,12 @@ Term net_close_run(Env e, Term* f, IoWork* w) {
     net_drop(fd);
   }
   close(fd);
-  return term_pak(CID_UNIT, 0);
+  return term_pak(CID(Unit), 0);
 }
 
 static void __attribute__((constructor)) net_close_use(void) {
-#ifdef CID_NET_CLOSE
-  io_eff(CID_NET_CLOSE, net_close_run, 0);
+#ifdef CID(Net.close)
+  io_eff(CID(Net.close), net_close_run, 0);
 #endif
 }
 
@@ -897,8 +897,8 @@ Term net_time_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_time_use(void) {
-#ifdef CID_NET_TIME
-  io_eff(CID_NET_TIME, net_time_run, 0);
+#ifdef CID(Net.time)
+  io_eff(CID(Net.time), net_time_run, 0);
 #endif
 }
 
@@ -913,8 +913,8 @@ Term net_hostname_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_hostname_use(void) {
-#ifdef CID_NET_HOSTNAME
-  io_eff(CID_NET_HOSTNAME, net_hostname_run, 0);
+#ifdef CID(Net.hostname)
+  io_eff(CID(Net.hostname), net_hostname_run, 0);
 #endif
 }
 
@@ -945,8 +945,8 @@ Term net_helo_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) net_helo_use(void) {
-#ifdef CID_NET_HELO
-  io_eff(CID_NET_HELO, net_helo_run, 0);
+#ifdef CID(Net.helo)
+  io_eff(CID(Net.helo), net_helo_run, 0);
 #endif
 }
 
@@ -955,12 +955,12 @@ static void __attribute__((constructor)) net_helo_use(void) {
 
 Term net_debug_run(Env e, Term* f, IoWork* w) {
   net_dbg = (u32)f[0] != 0;
-  return term_pak(CID_UNIT, 0);
+  return term_pak(CID(Unit), 0);
 }
 
 static void __attribute__((constructor)) net_debug_use(void) {
-#ifdef CID_NET_DEBUG
-  io_eff(CID_NET_DEBUG, net_debug_run, 0);
+#ifdef CID(Net.debug)
+  io_eff(CID(Net.debug), net_debug_run, 0);
 #endif
 }
 
@@ -1059,8 +1059,8 @@ Term dkim_sha256_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) dkim_sha256_use(void) {
-#ifdef CID_DKIM_SHA256
-  io_eff(CID_DKIM_SHA256, dkim_sha256_run, 0);
+#ifdef CID(Dkim.sha256)
+  io_eff(CID(Dkim.sha256), dkim_sha256_run, 0);
 #endif
 }
 
@@ -1093,8 +1093,8 @@ Term dkim_alg_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) dkim_alg_use(void) {
-#ifdef CID_DKIM_ALG
-  io_eff(CID_DKIM_ALG, dkim_alg_run, 0);
+#ifdef CID(Dkim.alg)
+  io_eff(CID(Dkim.alg), dkim_alg_run, 0);
 #endif
 }
 
@@ -1146,7 +1146,7 @@ Term dkim_sign_run(Env e, Term* f, IoWork* w) {
 }
 
 static void __attribute__((constructor)) dkim_sign_use(void) {
-#ifdef CID_DKIM_SIGN
-  io_eff(CID_DKIM_SIGN, dkim_sign_run, 0);
+#ifdef CID(Dkim.sign)
+  io_eff(CID(Dkim.sign), dkim_sign_run, 0);
 #endif
 }

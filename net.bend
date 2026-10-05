@@ -70,3 +70,22 @@ def Net.hostname() -> IO(String):
 def Net.debug(on: U32) -> IO(Unit):
   import "./net.c"
   import "./net.js"
+
+# DKIM's hash and signature (the pure parts are in dkim.bend)
+# ----------------------------------------------------------
+
+# The SHA-256 of a text's bytes, in base64.
+def Dkim.sha256(data: String) -> IO(Result<&1, &1, U32 & String, String>):
+  import "./net.c"
+  import "./net.js"
+
+# "rsa-sha256" or "ed25519-sha256", by the kind of the PEM private key.
+def Dkim.alg(keyfile: String) -> IO(Result<&1, &1, U32 & String, String>):
+  import "./net.c"
+  import "./net.js"
+
+# The signature of a text's bytes with the PEM private key, in base64.
+def Dkim.sign(keyfile: String, data: String) ->
+  IO(Result<&1, &1, U32 & String, String>):
+  import "./net.c"
+  import "./net.js"

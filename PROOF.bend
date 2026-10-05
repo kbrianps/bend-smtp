@@ -3,8 +3,8 @@
 import Base
 import ./text.bend as T
 import ./reply.bend as R
-import ./smtp.bend as S
-import ./sink.bend as K
+import ./core.bend as S
+import ./sink_core.bend as K
 import ./mime.bend as M
 import ./idna.bend as I
 import ./addr.bend as A

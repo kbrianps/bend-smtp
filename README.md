@@ -6,14 +6,15 @@ An SMTP client written in [Bend 2](https://github.com/bendlang/bend): TLS, OAuth
 
 ```python
 import Base
+import ./core.bend as C
 import ./smtp.bend as S
 
 def main() -> IO(Unit):
   do IO<Unit>:
     pass : String <- IO.try(String, IO.get_env("SMTP_PASSWORD"))
-    b : S.Batch <- S.Smtp.send_mail(
-      S.Opts.login(S.Opts.new("smtp.example.com"), "me@example.com", pass),
-      S.Mail.new("Me <me@example.com>", "Ana <ana@x.com>, b@y.com", "Hi", "It works."))
+    b : C.Batch <- S.Smtp.send_mail(
+      C.Opts.login(C.Opts.new("smtp.example.com"), "me@example.com", pass),
+      C.Mail.new("Me <me@example.com>", "Ana <ana@x.com>, b@y.com", "Hi", "It works."))
     IO.print("done")
 ```
 
@@ -26,7 +27,7 @@ A complete program is in [`examples/hello.bend`](examples/hello.bend). There is 
 
 ## What is proven
 
-`bend PROOF.bend` only passes while every law in [`LAWS.bend`](LAWS.bend) holds.
+`bend PROOF.bend` prints ALL PROOFS CHECK only while every law in [`LAWS.bend`](LAWS.bend) holds. The laws are about `core.bend` and the other pure files, which the checker also guarantees call no foreign code: everything that touches the network is in `smtp.bend` and `net.c`.
 
 - **No injection, for every string.** A cleaned field holds no CR or LF (by induction), and every address, subject and header goes through it: none can start a new SMTP command or a new header line.
 - **The RFCs' own test vectors**, checked by computation: base64 (RFC 4648), MD5 (RFC 1321), CRAM-MD5 (RFC 2195), AUTH PLAIN (RFC 4616), XOAUTH2 (Google's example), OAUTHBEARER (RFC 7628), Punycode (RFC 3492), DKIM canonicalization (RFC 6376 3.4.5).
@@ -49,7 +50,7 @@ Checked against real servers: authenticated sends through Gmail (STARTTLS and im
 
 ## Limits
 
-- **Native build only**, tested on Linux. The network and TLS are C effects that open OpenSSL at run time (`libssl` 1.1 or 3 must be installed); under the JS backend they answer "not supported".
+- **Bend 2.0.35**, native build only, tested on Linux. Bend's C side has no stable ABI between releases, so another version may need the effects in `net.c` adjusted. The network and TLS are C effects that open OpenSSL at run time (`libssl` 1.1 or 3 must be installed); under the JS backend they answer "not supported".
 - **Memory**: a Bend string is a linked list, so an attachment costs about 55 bytes of RAM per byte (10 MB: about 1 s and 570 MB).
 - **OAuth**: it sends an access token you already have; it does not obtain or refresh one.
 - **IDNA**: a non-ASCII domain is converted as written (ASCII letters lower-cased), without Unicode normalization.
@@ -71,10 +72,10 @@ Checked against real servers: authenticated sends through Gmail (STARTTLS and im
 
 ## Files
 
-- `smtp.bend`: the client (`Smtp.send_mail`, `Smtp.send_many`, `Opts.*`, `Mail.*`); `send.bend`: the command line
+- `core.bend`: the pure core (`Opts.*`, `Mail.*`, the commands, the plan for a message, the outcome); `smtp.bend`: the dialog (`Smtp.send_mail`, `Smtp.send_many`); `send.bend`: the command line
 - `net.c`, `net.bend`: connections, DNS, TLS, proxies, the DKIM hash and signature
 - `text.bend`, `reply.bend`, `mime.bend`, `addr.bend`, `idna.bend`, `md5.bend`, `dkim.bend`: the pure parts
-- `sink.bend`: a test SMTP server in Bend; `tests/`: a scriptable test server, test proxies, a DKIM verifier
+- `sink_core.bend`, `sink.bend`: a test SMTP server in Bend (its state machine, and its IO); `tests/`: a scriptable test server, test proxies, a DKIM verifier
 - `tests/certs/`: a CA, certificates and DKIM keys **for tests only** (the private keys are there on purpose)
 
 MIT license.

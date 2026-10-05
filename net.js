@@ -26,7 +26,7 @@ function net_poll(sock, max, ms) {
 }
 
 function net_close(sock) {
-  return { $: "Unit" };
+  return { $: CID(Unit) };
 }
 
 function net_time() {
@@ -42,7 +42,7 @@ function net_hostname() {
 }
 
 function net_debug(on) {
-  return { $: "Unit" };
+  return { $: CID(Unit) };
 }
 
 function net_connect_via(proxy, pport, user, pass, host, port, kind) {
@@ -60,3 +60,18 @@ function dkim_alg(keyfile) {
 function dkim_sign(keyfile, data) {
   return io_fail(95);
 }
+
+io_eff(CID(Net.connect), net_connect);
+io_eff(CID(Net.tls), net_tls);
+io_eff(CID(Net.tls_accept), net_tls_accept);
+io_eff(CID(Net.send), net_send);
+io_eff(CID(Net.poll), net_poll);
+io_eff(CID(Net.close), net_close);
+io_eff(CID(Net.time), net_time);
+io_eff(CID(Net.helo), net_helo);
+io_eff(CID(Net.hostname), net_hostname);
+io_eff(CID(Net.debug), net_debug);
+io_eff(CID(Net.connect_via), net_connect_via);
+io_eff(CID(Dkim.sha256), dkim_sha256);
+io_eff(CID(Dkim.alg), dkim_alg);
+io_eff(CID(Dkim.sign), dkim_sign);

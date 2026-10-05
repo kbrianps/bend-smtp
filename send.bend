@@ -22,6 +22,7 @@
 # Exit: 0 sent to everyone; 3 sent in part (a refused recipient, or some
 # of the messages); 1 nothing sent; 2 bad usage.
 import Base
+import ./core.bend as C
 import ./smtp.bend as S
 import ./addr.bend as A
 import ./mime.bend as M
@@ -74,6 +75,7 @@ def Args.opts(xs: List<&2, String>) -> List<&2, Opt>:
     case Con{k, Con{v, rest}}:
       Opt{k, v} <> Args.opts(rest)
 
+# The command line as a reusable list (its head is the program itself).
 def Args.copy(xs: List<String>) -> List<&2, String>:
   match xs:
     case Nil{}:
@@ -129,18 +131,18 @@ def Args.bad(os: List<&2, Opt>) -> String:
 # Options
 # -------
 
-def Send.mode(+tls: String, +port: String) -> S.Mode:
-  Bool.pick(S.Mode, String.eq(tls, "tls"), S.Tls{},
-  Bool.pick(S.Mode, String.eq(tls, "plain"), S.Plain{},
-  Bool.pick(S.Mode, String.eq(tls, "starttls"), S.StartTls{},
-  Bool.pick(S.Mode, String.eq(port, "465"), S.Tls{}, S.StartTls{}))))
+def Send.mode(+tls: String, +port: String) -> C.Mode:
+  Bool.pick(C.Mode, String.eq(tls, "tls"), C.Tls{},
+  Bool.pick(C.Mode, String.eq(tls, "plain"), C.Plain{},
+  Bool.pick(C.Mode, String.eq(tls, "starttls"), C.StartTls{},
+  Bool.pick(C.Mode, String.eq(port, "465"), C.Tls{}, C.StartTls{}))))
 
-def Send.auth(+a: String) -> S.Auth:
-  Bool.pick(S.Auth, String.eq(a, "plain"), S.APlain{},
-  Bool.pick(S.Auth, String.eq(a, "login"), S.ALogin{},
-  Bool.pick(S.Auth, String.eq(a, "cram-md5"), S.ACram{},
-  Bool.pick(S.Auth, String.eq(a, "xoauth2"), S.AXoauth2{},
-  Bool.pick(S.Auth, String.eq(a, "oauthbearer"), S.ABearer{}, S.AAuto{})))))
+def Send.auth(+a: String) -> C.Auth:
+  Bool.pick(C.Auth, String.eq(a, "plain"), C.APlain{},
+  Bool.pick(C.Auth, String.eq(a, "login"), C.ALogin{},
+  Bool.pick(C.Auth, String.eq(a, "cram-md5"), C.ACram{},
+  Bool.pick(C.Auth, String.eq(a, "xoauth2"), C.AXoauth2{},
+  Bool.pick(C.Auth, String.eq(a, "oauthbearer"), C.ABearer{}, C.AAuto{})))))
 
 def Send.port.or(m: Maybe<&2, U32>, +dflt: U32) -> U32:
   match m:
@@ -149,13 +151,13 @@ def Send.port.or(m: Maybe<&2, U32>, +dflt: U32) -> U32:
     case Some{p}:
       p
 
-def Send.port.dflt(mode: S.Mode) -> U32:
+def Send.port.dflt(mode: C.Mode) -> U32:
   match mode:
-    case S.Tls{}:
+    case C.Tls{}:
       465
-    case S.StartTls{}:
+    case C.StartTls{}:
       587
-    case S.Plain{}:
+    case C.Plain{}:
       25
 
 def Send.both(+os: List<&2, Opt>, a: String, b: String) -> Bool:
@@ -224,25 +226,25 @@ def Send.problem(+os: List<&2, Opt>) -> String:
     String.to_lower(Args.get(os, "--dkim-canon")))),
     "--dkim-canon takes relaxed or simple, for the header and the body: "
       ++ "relaxed/relaxed (default), relaxed/simple, simple/relaxed, simple/simple",
-  Bool.pick(String, Bool.not(String.is_empty(S.Proxy.problem(Args.get(os, "--proxy")))),
-    S.Proxy.problem(Args.get(os, "--proxy")),
+  Bool.pick(String, Bool.not(String.is_empty(C.Proxy.problem(Args.get(os, "--proxy")))),
+    C.Proxy.problem(Args.get(os, "--proxy")),
   Bool.pick(String, Send.both(os, "--body", "--body-file"),
     "--body and --body-file exclude each other",
   Bool.pick(String, Send.both(os, "--html", "--html-file"),
     "--html and --html-file exclude each other", ""))))))))))))))))
 
 # The named options of S.Opts, from the flags of the same names.
-def Send.more(+os: List<&2, Opt>, ks: List<&2, String>) -> List<&2, S.Kv>:
+def Send.more(+os: List<&2, Opt>, ks: List<&2, String>) -> List<&2, C.Kv>:
   match ks:
     case Nil{}:
       Nil{}
     case Con{+k, t}:
-      S.Kv{k, Args.get(os, "--" ++ k)} <> Send.more(os, t)
+      C.Kv{k, Args.get(os, "--" ++ k)} <> Send.more(os, t)
 
-def Send.opts(+os: List<&2, Opt>, pass: String, token: String) -> S.Opts:
+def Send.opts(+os: List<&2, Opt>, pass: String, token: String) -> C.Opts:
   +port = Args.get(os, "--port")
   +mode = Send.mode(Args.get(os, "--tls"), port)
-  S.Opts{Args.get(os, "--host"),
+  C.Opts{Args.get(os, "--host"),
     Send.port.or(U32.read(port), Send.port.dflt(mode)), mode,
     Args.get(os, "--cafile"), Args.get(os, "--helo"), Args.get(os, "--user"), pass,
     Send.auth(Args.get(os, "--auth")), token, Args.on(os, "--debug"),
@@ -252,14 +254,14 @@ def Send.opts(+os: List<&2, Opt>, pass: String, token: String) -> S.Opts:
 
 # "Name: value" as a header; a line with no ":" has no name, and is
 # refused later.
-def Send.header.of(parts: List<&2, String>) -> S.Hdr:
+def Send.header.of(parts: List<&2, String>) -> C.Hdr:
   match parts:
     case Con{n, Con{v, rest}}:
-      S.Hdr{String.trim(n), String.trim(String.join(v <> rest, ":"))}
+      C.Hdr{String.trim(n), String.trim(String.join(v <> rest, ":"))}
     case _:
-      S.Hdr{"", ""}
+      C.Hdr{"", ""}
 
-def Send.headers(hs: List<&2, String>) -> List<&2, S.Hdr>:
+def Send.headers(hs: List<&2, String>) -> List<&2, C.Hdr>:
   match hs:
     case Nil{}:
       Nil{}
@@ -268,29 +270,29 @@ def Send.headers(hs: List<&2, String>) -> List<&2, S.Hdr>:
 
 # The message as the options describe it.
 def Send.mail(+os: List<&2, Opt>, text: String, html: String,
-  files: List<&2, M.Part>) -> S.Mail:
-  S.Mail{A.Mbox.parse(Args.get(os, "--from")), A.Mbox.list(Args.get(os, "--to")),
+  files: List<&2, M.Part>) -> C.Mail:
+  C.Mail{A.Mbox.parse(Args.get(os, "--from")), A.Mbox.list(Args.get(os, "--to")),
     A.Mbox.list(Args.get(os, "--cc")), A.Mbox.list(Args.get(os, "--bcc")),
     A.Mbox.list(Args.get(os, "--reply-to")), Args.get(os, "--subject"), text, html,
     files, Send.headers(Args.all(os, "--header"))}
 
 # m with t as its only To.
-def Send.only(m: S.Mail, t: A.Mbox) -> S.Mail:
-  S.Mail{from, _, cc, bcc, reply, subject, text, html, files, headers} = m
-  S.Mail{from, [t], cc, bcc, reply, subject, text, html, files, headers}
+def Send.only(m: C.Mail, t: A.Mbox) -> C.Mail:
+  C.Mail{from, _, cc, bcc, reply, subject, text, html, files, headers} = m
+  C.Mail{from, [t], cc, bcc, reply, subject, text, html, files, headers}
 
-def Send.alone(+m: S.Mail, to: List<&2, A.Mbox>) -> List<&2, S.Mail>:
+def Send.alone(+m: C.Mail, to: List<&2, A.Mbox>) -> List<&2, C.Mail>:
   match to:
     case Nil{}:
       Nil{}
     case Con{t, rest}:
       Send.only(m, t) <> Send.alone(m, rest)
 
-def Send.to(m: S.Mail) -> List<&2, A.Mbox>:
-  S.Mail{_, to, _, _, _, _, _, _, _, _} = m
+def Send.to(m: C.Mail) -> List<&2, A.Mbox>:
+  C.Mail{_, to, _, _, _, _, _, _, _, _} = m
   to
 
-def Send.mails.at(each: Bool, +m: S.Mail) -> List<&2, S.Mail>:
+def Send.mails.at(each: Bool, +m: C.Mail) -> List<&2, C.Mail>:
   match each:
     case True{}:
       Send.alone(m, Send.to(m))
@@ -299,7 +301,7 @@ def Send.mails.at(each: Bool, +m: S.Mail) -> List<&2, S.Mail>:
 
 # The messages to send: the one described, or, with --individually, a
 # copy of it for each --to address.
-def Send.mails(+os: List<&2, Opt>, m: S.Mail) -> List<&2, S.Mail>:
+def Send.mails(+os: List<&2, Opt>, m: C.Mail) -> List<&2, C.Mail>:
   Send.mails.at(Args.on(os, "--individually"), m)
 
 # What is missing for AUTH, or "": a password for PLAIN and LOGIN, a
@@ -341,8 +343,8 @@ def Rep.refused(+bad: List<&2, String>) -> String:
     ", but these recipients were refused:" ++ Rep.lines(bad))
 
 # One message's line, and whether it went.
-def Rep.one(+label: String, x: S.Sent) -> Bool & String:
-  S.Sent{+code, +error, +bad} = x
+def Rep.one(+label: String, x: C.Sent) -> Bool & String:
+  C.Sent{+code, +error, +bad} = x
   (U32.is_zero(code), Bool.pick(String, U32.is_zero(code),
     "sent" ++ Rep.to(label) ++ Rep.refused(bad),
     "failed" ++ Rep.to(label) ++ " (" ++ U32.show(code) ++ "): " ++ error
@@ -355,7 +357,7 @@ def Rep.add(r: Rep, l: Bool & String) -> Rep:
     text ++ Bool.pick(String, String.is_empty(text), "", "\n") ++ line}
 
 # The messages tried, each with its label.
-def Rep.each(xs: List<&2, S.Sent>, ls: List<&2, String>, r: Rep) -> Rep:
+def Rep.each(xs: List<&2, C.Sent>, ls: List<&2, String>, r: Rep) -> Rep:
   match xs ls:
     case Nil{} _:
       r
@@ -374,10 +376,10 @@ def Rep.fatal(r: Rep, +code: U32, +error: String, +left: U32) -> Rep:
         "\n" ++ U32.show(left) ++ " messages were not tried", "")})
 
 # The report of a connection; labels name the messages ([""] for one).
-def Rep.of(+labels: List<&2, String>, b: S.Batch) -> Rep:
-  S.Batch{+sent, code, error} = b
+def Rep.of(+labels: List<&2, String>, b: C.Batch) -> Rep:
+  C.Batch{+sent, code, error} = b
   +n = U32.from_nat(List.length(&2, String, labels))
-  +k = U32.from_nat(List.length(&2, S.Sent, sent))
+  +k = U32.from_nat(List.length(&2, C.Sent, sent))
   Rep.fatal(Rep.each(sent, labels, Rep{0, 0, ""}), code, error, (n - k : U32))
 
 # 0 when every message went to everyone, 1 when none went, else 3.
@@ -475,7 +477,7 @@ def Send.files(ps: List<&2, String>) -> IO(List<&2, M.Part>):
         rest : List<&2, M.Part> <- Send.files(t)
         IO.pure(List<&2, M.Part>, part <> rest)
 
-def Send.labels.more(ms: List<&2, S.Mail>) -> List<&2, String>:
+def Send.labels.more(ms: List<&2, C.Mail>) -> List<&2, String>:
   match ms:
     case Nil{}:
       Nil{}
@@ -484,7 +486,7 @@ def Send.labels.more(ms: List<&2, S.Mail>) -> List<&2, String>:
 
 # The labels that tell the messages apart: each one's --to address, or
 # one empty label for a single message.
-def Send.labels(ms: List<&2, S.Mail>) -> List<&2, String>:
+def Send.labels(ms: List<&2, C.Mail>) -> List<&2, String>:
   match ms:
     case Nil{}:
       Nil{}
@@ -493,9 +495,9 @@ def Send.labels(ms: List<&2, S.Mail>) -> List<&2, String>:
     case Con{m, rest}:
       String.join(A.Mbox.addrs(Send.to(m)), ", ") <> Send.labels.more(rest)
 
-def Send.all(+o: S.Opts, +ms: List<&2, S.Mail>) -> IO(Unit):
+def Send.all(+o: C.Opts, +ms: List<&2, C.Mail>) -> IO(Unit):
   do IO<Unit>:
-    b : S.Batch <- S.Smtp.send_many(o, ms)
+    b : C.Batch <- S.Smtp.send_many(o, ms)
     Send.report(Rep.of(Send.labels(ms), b))
 
 def Send.go(+os: List<&2, Opt>, pass: String, token: String) -> IO(Unit):
@@ -551,4 +553,4 @@ def Send.args(+os: List<&2, Opt>) -> IO(Unit):
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()
-    Send.args(Args.parse(Args.copy(xs)))
+    Send.args(Args.parse(List.drop(&2, String, Args.copy(xs), 1n)))
