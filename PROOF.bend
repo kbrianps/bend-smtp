@@ -192,3 +192,12 @@ def Laws.dkim_fields():
 
 def Laws.refusal_kept(x, y, code, error):
   ({==}, {==})
+
+def Laws.proxy_never_skipped():
+  {==}
+
+def Laws.dkim_simple():
+  {==}
+
+def Laws.dkim_simple_data():
+  {==}

@@ -473,11 +473,21 @@ law cram_choice:
 # scheme gives no proxy.
 law proxy_url:
   {[S.Proxy.of("socks5://p.example:9050"), S.Proxy.of("socks5://p.example"),
-    S.Proxy.of("socks5://zé:s:e@nha@127.0.0.1:1081"), S.Proxy.of("http://p.example:80"),
-    S.Proxy.of("")]
-    == [S.Proxy{"p.example", 9050, "", ""}, S.Proxy{"p.example", 1080, "", ""},
-      S.Proxy{"127.0.0.1", 1081, "zé", "s:e@nha"}, S.Proxy{"", 0, "", ""},
-      S.Proxy{"", 0, "", ""}] : List<S.Proxy>}
+    S.Proxy.of("socks5://zé:s:e@nha@127.0.0.1:1081"), S.Proxy.of("http://u:p@p.example"),
+    S.Proxy.of("https://p.example:80"), S.Proxy.of("")]
+    == [S.Proxy{0, "p.example", 9050, "", ""}, S.Proxy{0, "p.example", 1080, "", ""},
+      S.Proxy{0, "127.0.0.1", 1081, "zé", "s:e@nha"},
+      S.Proxy{1, "p.example", 8080, "u", "p"}, S.Proxy{0, "", 0, "", ""},
+      S.Proxy{0, "", 0, "", ""}] : List<S.Proxy>}
+
+# LAW: a proxy asked for and not understood is an error, never a direct
+# connection; no proxy asked for is no problem.
+law proxy_never_skipped:
+  {[S.Proxy.problem(""), S.Proxy.problem("socks5://p.example"),
+    S.Proxy.problem("https://p.example")]
+    == ["", "",
+      "bad proxy URL (socks5://[user:pass@]host[:port] or http://...): https://p.example"]
+    : List<String>}
 
 # DKIM
 # ----
@@ -501,13 +511,34 @@ law dkim_fields:
     == [Q.Field{"A", " 3"}, Q.Field{"B", " 2\r\n c"}, Q.Field{"A", " 1"}]
     : List<&2, Q.Field>}
 
-# LAW: what is signed is each field in relaxed form with its CRLF, last
-# first, then the DKIM-Signature with b= empty and no CRLF after it.
+# LAW: what is signed is each field in canonical form with its CRLF,
+# last first, then the DKIM-Signature with b= empty and no CRLF after
+# it; an oversigned name is in h= once more than its field occurs, and
+# adds nothing to what is signed.
 law dkim_signed_data:
-  {Q.Dkim.data(Q.Dkim.fields("From: a@b.c\r\nSubject:  Oi\r\n"),
-    Q.Dkim.tags("rsa-sha256", "b.c", "s1", 7, Q.Dkim.fields("From: a@b.c\r\nSubject:  Oi\r\n"),
-      "BH="))
-    == "subject:Oi\r\nfrom:a@b.c\r\ndkim-signature:v=1; a=rsa-sha256; c=relaxed/relaxed; d=b.c; s=s1; t=7; h=subject:from; bh=BH=; b="
+  {Q.Dkim.data(True{}, Q.Dkim.fields("From: a@b.c\r\nSubject:  Oi\r\n"),
+    Q.Dkim.tags("rsa-sha256", True{}, True{}, "b.c", "s1", 7,
+      Q.Dkim.fields("From: a@b.c\r\nSubject:  Oi\r\n"), ["from", "cc"], "BH="))
+    == "subject:Oi\r\nfrom:a@b.c\r\ndkim-signature:v=1; a=rsa-sha256; c=relaxed/relaxed; d=b.c; s=s1; t=7; h=subject:from:from:cc; bh=BH=; b="
+    : String}
+
+# LAW: the simple forms match RFC 6376's example (section 3.4.5): the
+# fields untouched, and the body with only its trailing empty lines
+# gone; an empty body is one CRLF (3.4.3).
+law dkim_simple:
+  {[Q.Dkim.simple(Q.Field{"A", " X"}), Q.Dkim.simple(Q.Field{"B ", " Y\t\r\n\tZ  "}),
+    Q.Dkim.body.of(False{}, " C \r\nD \t E\r\n\r\n\r\n"), Q.Dkim.body.of(False{}, ""),
+    Q.Dkim.body.of(False{}, "a")]
+    == ["A: X", "B : Y\t\r\n\tZ  ", " C \r\nD \t E\r\n", "\r\n", "a\r\n"]
+    : List<String>}
+
+# LAW: in simple form the DKIM-Signature is signed as it will be
+# written, and c= says which forms were used.
+law dkim_simple_data:
+  {Q.Dkim.data(False{}, Q.Dkim.fields("From: a@b.c\r\n"),
+    Q.Dkim.tags("rsa-sha256", False{}, True{}, "b.c", "s1", 7,
+      Q.Dkim.fields("From: a@b.c\r\n"), [], "BH="))
+    == "From: a@b.c\r\nDKIM-Signature: v=1; a=rsa-sha256; c=simple/relaxed; d=b.c; s=s1;\r\n t=7; h=from;\r\n bh=BH=;\r\n b="
     : String}
 
 # LAW: a refusal already known is kept when the clean-up after it loses

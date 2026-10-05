@@ -1310,66 +1310,89 @@ def Smtp.connected(r: Result<&1, &1, U32 & String, Socket>, +o: Opts, +js: List<
     case Done{s}:
       Smtp.opened(Opts.mode(o), o, js, s)
 
-# A SOCKS5 proxy: its host and port, and a user and password ("" for
-# none); no host means no proxy.
+# A proxy: its kind (0: SOCKS5, RFC 1928; 1: HTTP CONNECT, RFC 9110
+# 9.3.6), host and port, and a user and password ("" for none); no host
+# means no proxy.
 type Proxy is Data:
-  Proxy{host: String, port: U32, user: String, pass: String}
+  Proxy{kind: U32, host: String, port: U32, user: String, pass: String}
 
-def Proxy.port(m: Maybe<&2, U32>) -> U32:
+def Proxy.none() -> Proxy:
+  Proxy{0, "", 0, "", ""}
+
+def Proxy.port(m: Maybe<&2, U32>, dflt: U32) -> U32:
   match m:
     case None{}:
-      1080
+      dflt
     case Some{p}:
       p
 
-# "host[:port]" (port 1080 when absent).
-def Proxy.host(hp: List<&2, String>, user: String, pass: String) -> Proxy:
+# "host[:port]"; dflt: the port when absent.
+def Proxy.host(hp: List<&2, String>, kind: U32, dflt: U32, user: String,
+  pass: String) -> Proxy:
   match hp:
     case Con{h, Nil{}}:
-      Proxy{h, 1080, user, pass}
+      Proxy{kind, h, dflt, user, pass}
     case Con{h, Con{p, Nil{}}}:
-      Proxy{h, Proxy.port(U32.read(p)), user, pass}
+      Proxy{kind, h, Proxy.port(U32.read(p), dflt), user, pass}
     case _:
-      Proxy{"", 0, "", ""}
+      Proxy.none()
 
 # "user[:pass]".
-def Proxy.creds(up: List<&2, String>, hp: List<&2, String>) -> Proxy:
+def Proxy.creds(up: List<&2, String>, hp: List<&2, String>, kind: U32,
+  dflt: U32) -> Proxy:
   match up:
     case Con{u, Nil{}}:
-      Proxy.host(hp, u, "")
+      Proxy.host(hp, kind, dflt, u, "")
     case Con{u, Con{p, rest}}:
-      Proxy.host(hp, u, String.join(p <> rest, ":"))
+      Proxy.host(hp, kind, dflt, u, String.join(p <> rest, ":"))
     case _:
-      Proxy.host(hp, "", "")
+      Proxy.host(hp, kind, dflt, "", "")
 
 # "[user[:pass]@]host[:port]"; the last "@" divides them.
-def Proxy.parts(+ps: List<&2, String>) -> Proxy:
+def Proxy.parts(+ps: List<&2, String>, kind: U32, dflt: U32) -> Proxy:
   +n = Nat.sub(List.length(&2, String, ps), 1n)
   Proxy.creds(String.split(String.join(List.take(&2, String, ps, n), "@"), ':'),
-    String.split(String.join(List.drop(&2, String, ps, n), "@"), ':'))
+    String.split(String.join(List.drop(&2, String, ps, n), "@"), ':'), kind, dflt)
 
-# A proxy from "socks5://[user[:pass]@]host[:port]" (also "socks5h://",
-# the same here: the proxy always resolves the name); "" and anything
-# else give none.
+def Proxy.rest(+rest: String, kind: U32, dflt: U32) -> Proxy:
+  Bool.pick(Proxy, String.is_empty(rest), Proxy.none(),
+    Proxy.parts(String.split(rest, '@'), kind, dflt))
+
+# A proxy from "socks5://[user[:pass]@]host[:port]" (port 1080; also
+# "socks5h://", the same here: the proxy always resolves the name) or
+# "http://..." (port 8080); "" and anything else give none.
 def Proxy.of(+url: String) -> Proxy:
-  +rest = Bool.pick(String, String.starts_with(url, "socks5://"), String.drop(url, 9n),
-    Bool.pick(String, String.starts_with(url, "socks5h://"), String.drop(url, 10n), ""))
-  Bool.pick(Proxy, String.is_empty(rest), Proxy{"", 0, "", ""},
-    Proxy.parts(String.split(rest, '@')))
+  Bool.pick(Proxy, String.starts_with(url, "socks5://"),
+    Proxy.rest(String.drop(url, 9n), 0, 1080),
+  Bool.pick(Proxy, String.starts_with(url, "socks5h://"),
+    Proxy.rest(String.drop(url, 10n), 0, 1080),
+  Bool.pick(Proxy, String.starts_with(url, "http://"),
+    Proxy.rest(String.drop(url, 7n), 1, 8080), Proxy.none())))
 
-def Smtp.dial.at(direct: Bool, ph: String, pp: U32, user: String, pass: String,
-  host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
+def Proxy.named(p: Proxy) -> Bool:
+  Proxy{_, h, _, _, _} = p
+  Bool.not(String.is_empty(h))
+
+# A proxy that was asked for but cannot be read is an error: going on
+# without it would connect directly, which is what it was there to avoid.
+def Proxy.problem(+url: String) -> String:
+  Bool.pick(String, String.is_empty(url) || Proxy.named(Proxy.of(url)), "",
+    "bad proxy URL (socks5://[user:pass@]host[:port] or http://...): " ++ url)
+
+def Smtp.dial.at(direct: Bool, kind: U32, ph: String, pp: U32, user: String,
+  pass: String, host: String, port: U32) ->
+  IO(Result<&1, &1, U32 & String, Socket>):
   match direct:
     case True{}:
       N.Net.connect(host, port)
     case False{}:
-      N.Net.connect_via(ph, pp, user, pass, host, port)
+      N.Net.connect_via(ph, pp, user, pass, host, port, kind)
 
 # The connection: direct, or through the proxy.
 def Smtp.dial(p: Proxy, host: String, port: U32) ->
   IO(Result<&1, &1, U32 & String, Socket>):
-  Proxy{+ph, pp, user, pass} = p
-  Smtp.dial.at(String.is_empty(ph), ph, pp, user, pass, host, port)
+  Proxy{kind, +ph, pp, user, pass} = p
+  Smtp.dial.at(String.is_empty(ph), kind, ph, pp, user, pass, host, port)
 
 def Smtp.job(+m: Mail, +t: U32, +a: U32, b: U32, c: U32) -> Job:
   Job{m, Smtp.text(m, t, Hex.of(t) ++ "." ++ Hex.of(a) ++ Hex.of(b),
@@ -1384,24 +1407,38 @@ def Smtp.must(r: Result<&1, &1, U32 & String, String>) -> IO(String):
       (_, msg) = e
       IO.die(String, 1, msg)
 
-def Smtp.sign.end(+tags: String, +fs: List<&2, Q.Field>, key: String, m: Mail,
-  msg: String) -> IO(Job):
+def Smtp.sign.end(+tags: String, +hr: Bool, +fs: List<&2, Q.Field>, key: String,
+  m: Mail, msg: String) -> IO(Job):
   do IO<Job>:
-    r : Result<&1, &1, U32 & String, String> <- Q.Dkim.sign(key, Q.Dkim.data(fs, tags))
+    r : Result<&1, &1, U32 & String, String> <- Q.Dkim.sign(key,
+      Q.Dkim.data(hr, fs, tags))
     sig : String <- Smtp.must(r)
     IO.pure(Job, Job{m, Q.Dkim.header(tags, sig) ++ msg})
+
+# The header form of "header[/body]" (c=, RFC 6376 3.5): relaxed unless
+# it says simple.
+def Canon.header(+c: String) -> Bool:
+  Bool.not(String.starts_with(String.to_lower(c), "simple"))
+
+# The body form: relaxed by default here; with only the header form
+# given, simple, as the tag reads.
+def Canon.body(+c: String) -> Bool:
+  String.is_empty(c) || String.ends_with(String.to_lower(c), "/relaxed")
 
 def Smtp.sign.cut(c: Q.Cut, +o: Opts, t: U32, m: Mail, msg: String) -> IO(Job):
   Q.Cut{head, body} = c
   +fs = Q.Dkim.fields(head)
+  +canon = Opts.opt(o, "dkim-canon")
   do IO<Job>:
     ra : Result<&1, &1, U32 & String, String> <- Q.Dkim.alg(Opts.opt(o, "dkim-key"))
     alg : String <- Smtp.must(ra)
-    rb : Result<&1, &1, U32 & String, String> <- Q.Dkim.sha256(Q.Dkim.body(body,
-      False{}, 0n, ""))
+    rb : Result<&1, &1, U32 & String, String> <- Q.Dkim.sha256(
+      Q.Dkim.body.of(Canon.body(canon), body))
     bh : String <- Smtp.must(rb)
-    Smtp.sign.end(Q.Dkim.tags(alg, Opts.opt(o, "dkim-domain"),
-      Opts.opt(o, "dkim-selector"), t, fs, bh), fs, Opts.opt(o, "dkim-key"), m, msg)
+    Smtp.sign.end(Q.Dkim.tags(alg, Canon.header(canon), Canon.body(canon),
+      Opts.opt(o, "dkim-domain"), Opts.opt(o, "dkim-selector"), t, fs,
+      Bool.pick(List<&2, String>, Opts.on(o, "dkim-no-oversign"), Nil{}, Q.Dkim.over()),
+      bh), Canon.header(canon), fs, Opts.opt(o, "dkim-key"), m, msg)
 
 # The message with its DKIM-Signature in front, when a key was given. A
 # key that cannot be read or cannot sign ends the program: nothing goes
@@ -1467,8 +1504,10 @@ def Smtp.asciis(ms: List<&2, Mail>) -> List<&2, Mail>:
 # Send the messages over one connection, as o says: one transaction
 # each, in order. Nothing is sent if any of them is malformed.
 def Smtp.send_many(+o: Opts, +ms: List<&2, Mail>) -> IO(Out()):
-  Smtp.checked(Bool.pick(String, List.is_empty(&2, Mail, ms), "no messages",
-    Smtp.problems(ms)), o, Smtp.asciis(ms))
+  +bad = Proxy.problem(Opts.opt(o, "proxy"))
+  Smtp.checked(Bool.pick(String, Bool.not(String.is_empty(bad)), bad,
+    Bool.pick(String, List.is_empty(&2, Mail, ms), "no messages",
+      Smtp.problems(ms))), o, Smtp.asciis(ms))
 
 # Send one message as o says.
 def Smtp.send_mail(+o: Opts, m: Mail) -> IO(Out()):

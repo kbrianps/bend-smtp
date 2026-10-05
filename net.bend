@@ -18,10 +18,12 @@ def Net.tls(sock: Socket, host: String, cafile: String, cert: String,
   import "./net.c"
   import "./net.js"
 
-# A connection to host:port through a SOCKS5 proxy (RFC 1928), which
-# resolves the host; user "" skips its password step (RFC 1929).
+# A connection to host:port through a proxy, which resolves the host:
+# kind 0 is SOCKS5 (RFC 1928; user "" skips its password step, RFC
+# 1929), kind 1 an HTTP proxy's CONNECT (RFC 9110 9.3.6; user "" sends
+# no Proxy-Authorization).
 def Net.connect_via(proxy: String, pport: U32, user: String, pass: String,
-  host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
+  host: String, port: U32, kind: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
   import "./net.c"
   import "./net.js"
 

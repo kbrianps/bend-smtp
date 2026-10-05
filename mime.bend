@@ -359,6 +359,7 @@ def Mime.ctype(+n: String) -> String:
   Bool.pick(String, Mime.ext.is(n, ".webp"), "image/webp",
   Bool.pick(String, Mime.ext.is(n, ".svg"), "image/svg+xml",
   Bool.pick(String, Mime.ext.is(n, ".txt"), "text/plain",
+  Bool.pick(String, Mime.ext.is(n, ".md"), "text/markdown",
   Bool.pick(String, Mime.ext.is(n, ".csv"), "text/csv",
   Bool.pick(String, Mime.ext.is(n, ".html") || Mime.ext.is(n, ".htm"), "text/html",
   Bool.pick(String, Mime.ext.is(n, ".json"), "application/json",
@@ -375,7 +376,7 @@ def Mime.ctype(+n: String) -> String:
   Bool.pick(String, Mime.ext.is(n, ".pptx"),
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   Bool.pick(String, Mime.ext.is(n, ".odt"), "application/vnd.oasis.opendocument.text",
-    "application/octet-stream"))))))))))))))))))))
+    "application/octet-stream")))))))))))))))))))))
 
 # attr-char (RFC 2231 7): ALPHA DIGIT !#$&+-.^_`|~.
 def Mime.attr(+c: U32) -> Bool:

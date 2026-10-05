@@ -45,7 +45,7 @@ function net_debug(on) {
   return { $: "Unit" };
 }
 
-function net_connect_via(proxy, pport, user, pass, host, port) {
+function net_connect_via(proxy, pport, user, pass, host, port, kind) {
   return io_fail(95);
 }
 

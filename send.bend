@@ -39,10 +39,11 @@ def Args.valued() -> List<&2, String>:
     "--from", "--to", "--cc", "--bcc", "--reply-to", "--subject", "--body",
     "--body-file", "--html", "--html-file", "--attach", "--header", "--notify",
     "--ret", "--envid", "--proxy", "--cert", "--key", "--dkim-domain",
-    "--dkim-selector", "--dkim-key"]
+    "--dkim-selector", "--dkim-key", "--dkim-canon"]
 
 def Args.alone() -> List<&2, String>:
-  ["--debug", "--individually", "--lmtp", "--no-pipelining", "--chunking"]
+  ["--debug", "--individually", "--lmtp", "--no-pipelining", "--chunking",
+    "--dkim-no-oversign"]
 
 def Args.is(ks: List<&2, String>, k: String) -> Bool:
   List.contains(~String, ~String.eq, ks, k)
@@ -218,10 +219,17 @@ def Send.problem(+os: List<&2, Opt>) -> String:
   Bool.pick(String, Send.some(os, ["--dkim-domain", "--dkim-selector", "--dkim-key"])
     && Bool.not(Send.every(os, ["--dkim-domain", "--dkim-selector", "--dkim-key"])),
     "--dkim-domain, --dkim-selector and --dkim-key go together",
+  Bool.pick(String, Bool.not(Args.is(["", "relaxed/relaxed", "relaxed/simple",
+    "simple/relaxed", "simple/simple", "relaxed", "simple"],
+    String.to_lower(Args.get(os, "--dkim-canon")))),
+    "--dkim-canon takes relaxed or simple, for the header and the body: "
+      ++ "relaxed/relaxed (default), relaxed/simple, simple/relaxed, simple/simple",
+  Bool.pick(String, Bool.not(String.is_empty(S.Proxy.problem(Args.get(os, "--proxy")))),
+    S.Proxy.problem(Args.get(os, "--proxy")),
   Bool.pick(String, Send.both(os, "--body", "--body-file"),
     "--body and --body-file exclude each other",
   Bool.pick(String, Send.both(os, "--html", "--html-file"),
-    "--html and --html-file exclude each other", ""))))))))))))))
+    "--html and --html-file exclude each other", ""))))))))))))))))
 
 # The named options of S.Opts, from the flags of the same names.
 def Send.more(+os: List<&2, Opt>, ks: List<&2, String>) -> List<&2, S.Kv>:
@@ -239,7 +247,8 @@ def Send.opts(+os: List<&2, Opt>, pass: String, token: String) -> S.Opts:
     Args.get(os, "--cafile"), Args.get(os, "--helo"), Args.get(os, "--user"), pass,
     Send.auth(Args.get(os, "--auth")), token, Args.on(os, "--debug"),
     Send.more(os, ["lmtp", "notify", "ret", "envid", "no-pipelining", "chunking",
-      "proxy", "cert", "key", "dkim-domain", "dkim-selector", "dkim-key"])}
+      "proxy", "cert", "key", "dkim-domain", "dkim-selector", "dkim-key",
+      "dkim-canon", "dkim-no-oversign"])}
 
 # "Name: value" as a header; a line with no ":" has no name, and is
 # refused later.
@@ -503,9 +512,11 @@ def Send.usage() -> String:
     ++ " [--attach P]... [--header \"Name: value\"]... [--individually]"
     ++ " [--tls starttls|tls|plain] [--port N] [--user U]"
     ++ " [--auth plain|login|cram-md5|xoauth2|oauthbearer] [--cafile P]"
-    ++ " [--cert P --key P] [--helo NAME] [--proxy socks5://[U:P@]H:PORT]"
+    ++ " [--cert P --key P] [--helo NAME]"
+    ++ " [--proxy socks5://[U:P@]H[:PORT] | http://[U:P@]H[:PORT]]"
     ++ " [--notify never|success,failure,delay] [--ret full|hdrs] [--envid ID]"
-    ++ " [--dkim-domain D --dkim-selector S --dkim-key P] [--lmtp]"
+    ++ " [--dkim-domain D --dkim-selector S --dkim-key P"
+    ++ " [--dkim-canon relaxed/relaxed] [--dkim-no-oversign]] [--lmtp]"
     ++ " [--no-pipelining] [--chunking] [--debug]"
     ++ "\nsecrets: SMTP_PASSWORD or SMTP_OAUTH_TOKEN"
 

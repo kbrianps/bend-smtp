@@ -121,6 +121,16 @@ static void net_dbg_out(const char* p, u64 n) {
     fprintf(stderr, "C: (message, %llu octets)\n", (unsigned long long)n);
   } else if (net_dbg_mask) {
     fprintf(stderr, "C: (secret)\n");
+  } else if (n > 5 && strncasecmp(p, "BDAT ", 5) == 0) {
+    // A chunk: its command line, then the message's bytes as a size.
+    const char* nl = memchr(p, '\n', n);
+    u64 len = nl != NULL ? (u64)(nl - p) : n;
+    u64 rest = nl != NULL ? n - len - 1 : 0;
+    while (len > 0 && p[len - 1] == '\r') {
+      len -= 1;
+    }
+    fprintf(stderr, "C: %.*s\nC: (message, %llu octets)\n", (int)len, p,
+      (unsigned long long)rest);
   } else if (n > 5 && strncasecmp(p, "AUTH ", 5) == 0) {
     const char* sp = memchr(p + 5, ' ', n - 5);
     u64 len = sp != NULL ? (u64)(sp - p) : n;
@@ -312,6 +322,7 @@ typedef struct {
   char*    pass;
   char*    host;
   unsigned port;
+  unsigned kind;
 } NetVia;
 
 static int net_all(int fd, void* buf, size_t n, int out) {
@@ -405,6 +416,82 @@ static const char* net_socks(int fd, NetVia* v) {
   return NULL;
 }
 
+static void net_b64_raw(const unsigned char* p, size_t n, char* out) {
+  static const char* abc =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  size_t o = 0;
+  for (size_t i = 0; i < n; i += 3) {
+    u32 x = (u32)p[i] << 16 | (i + 1 < n ? (u32)p[i + 1] << 8 : 0)
+      | (i + 2 < n ? (u32)p[i + 2] : 0);
+    out[o++] = abc[x >> 18 & 63];
+    out[o++] = abc[x >> 12 & 63];
+    out[o++] = i + 1 < n ? abc[x >> 6 & 63] : '=';
+    out[o++] = i + 2 < n ? abc[x & 63] : '=';
+  }
+  out[o] = 0;
+}
+
+// An HTTP proxy's tunnel (RFC 9110 9.3.6) on a connected, blocking
+// socket: CONNECT host:port, with Basic credentials (RFC 7617) when
+// given; a 2xx opens it. NULL when it is through, else why not.
+static const char* net_http(int fd, NetVia* v) {
+  size_t ul = strlen(v->user), pl = strlen(v->pass), hl = strlen(v->host);
+  if (ul + pl > 500 || hl > 255 || hl == 0) {
+    return "http proxy: a name is too long";
+  }
+  for (size_t i = 0; i < hl; i += 1) {
+    if ((unsigned char)v->host[i] <= ' ') {
+      return "http proxy: a bad host name";
+    }
+  }
+  int  v6 = strchr(v->host, ':') != NULL;
+  char at[300];
+  snprintf(at, sizeof(at), v6 ? "[%s]:%u" : "%s:%u", v->host, v->port);
+  char req[2048];
+  int  n = snprintf(req, sizeof(req), "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", at, at);
+  if (ul > 0) {
+    unsigned char up[512];
+    char b64[700];
+    memcpy(up, v->user, ul);
+    up[ul] = ':';
+    memcpy(up + ul + 1, v->pass, pl);
+    net_b64_raw(up, ul + 1 + pl, b64);
+    n += snprintf(req + n, sizeof(req) - (size_t)n,
+      "Proxy-Authorization: Basic %s\r\n", b64);
+  }
+  n += snprintf(req + n, sizeof(req) - (size_t)n, "\r\n");
+  if (net_all(fd, req, (size_t)n, 1)) {
+    return "http proxy: the proxy closed the connection";
+  }
+  // The reply's head, a byte at a time: nothing past its empty line may
+  // be read, for it is already the server's greeting.
+  char   head[8192];
+  size_t got = 0;
+  while (got < sizeof(head) - 1) {
+    if (net_all(fd, head + got, 1, 0)) {
+      return "http proxy: the proxy closed the connection";
+    }
+    got += 1;
+    if (got >= 4 && memcmp(head + got - 4, "\r\n\r\n", 4) == 0) {
+      break;
+    }
+  }
+  head[got] = 0;
+  int status = 0;
+  if (sscanf(head, "HTTP/%*d.%*d %d", &status) != 1) {
+    return "http proxy: a malformed reply from the proxy";
+  }
+  if (status == 407) {
+    return "http proxy: the proxy wants (other) credentials (407)";
+  }
+  if (status < 200 || status > 299) {
+    static char why[80];
+    snprintf(why, sizeof(why), "http proxy: the proxy refused the tunnel (%d)", status);
+    return why;
+  }
+  return NULL;
+}
+
 static void net_via_call(IoWork* w) {
   NetVia* v = (NetVia*)w->data;
   char* keep = w->data;
@@ -421,7 +508,7 @@ static void net_via_call(IoWork* w) {
   fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-  const char* why = net_socks(fd, v);
+  const char* why = v->kind == 1 ? net_http(fd, v) : net_socks(fd, v);
   if (why != NULL) {
     close(fd);
     w->made = -1;
@@ -448,7 +535,8 @@ static Term net_via_pack(Env e, IoWork* w) {
   return io_done(e, io_hand(w->made));
 }
 
-// Net.connect_via(proxy, pport, user, pass, host, port).
+// Net.connect_via(proxy, pport, user, pass, host, port, kind): kind 0 is
+// SOCKS5, kind 1 an HTTP proxy's CONNECT.
 Term net_connect_via_run(Env e, Term* f, IoWork* w) {
   u64 n = 0;
   NetVia* v = io_mem(malloc(sizeof(NetVia)));
@@ -458,6 +546,7 @@ Term net_connect_via_run(Env e, Term* f, IoWork* w) {
   v->pass  = io_cstr(e, f[3], &n);
   v->host  = io_cstr(e, f[4], &n);
   v->port  = (u32)f[5];
+  v->kind  = (u32)f[6];
   w->data = (char*)v;
   w->code = 0;
   w->text = NULL;

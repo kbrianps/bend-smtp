@@ -3,7 +3,7 @@
   dkim_verify.py MESSAGE KEY.pem
 
 Uses dkimpy when it is installed; else its own reading of RFC 6376
-(relaxed/relaxed only) over the `cryptography` package. Exit 0 if valid.
+(no l= tag) over the `cryptography` package. Exit 0 if valid.
 """
 import base64, hashlib, re, subprocess, sys
 
@@ -32,22 +32,29 @@ def own():
     sig = next(f for f in fields if f.lower().startswith(b"dkim-signature:"))
     tags = dict(t.strip().split("=", 1) for t in
                 re.sub(r"\s+", " ", sig.split(b":", 1)[1].decode()).split(";") if "=" in t)
-    assert tags["c"] == "relaxed/relaxed", tags["c"]
-    lines = [re.sub(rb"[ \t]+", b" ", l).rstrip(b" ") for l in body.split(b"\r\n")]
+    hc, _, bc = tags["c"].partition("/")
+    bc = bc or "simple"
+    if bc == "relaxed":
+        lines = [re.sub(rb"[ \t]+", b" ", l).rstrip(b" ") for l in body.split(b"\r\n")]
+    else:
+        lines = body.split(b"\r\n")
     while lines and lines[-1] == b"":
         lines.pop()
     cbody = b"".join(l + b"\r\n" for l in lines)
+    if bc == "simple" and not cbody:
+        cbody = b"\r\n"
     bh = base64.b64encode(hashlib.sha256(cbody).digest()).decode()
     if bh != tags["bh"].replace(" ", ""):
         return False
+    canon = relax if hc == "relaxed" else (lambda f: f)
     pool = [f for f in fields if f is not sig]
     data = b""
     for name in tags["h"].replace(" ", "").split(":"):
         for i in range(len(pool) - 1, -1, -1):
             if pool[i].split(b":", 1)[0].strip().lower() == name.lower().encode():
-                data += relax(pool.pop(i)) + b"\r\n"
+                data += canon(pool.pop(i)) + b"\r\n"
                 break
-    data += relax(re.sub(rb"b=[^;]*$", b"b=", sig, flags=re.S))
+    data += canon(re.sub(rb"b=[^;]*$", b"b=", sig, flags=re.S))
     signature = base64.b64decode(tags["b"].replace(" ", ""))
     key = serialization.load_der_public_key(pub_der)
     try:
