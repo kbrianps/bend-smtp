@@ -27,7 +27,7 @@ Those two lines fetch the package from the Bend hub (or clone this repository an
 
 ## What is proven
 
-`bend PROOF.bend` prints ALL PROOFS CHECK only while every law in [`LAWS.bend`](LAWS.bend) holds. The laws are about `core.bend` and the other pure files, which the checker also guarantees call no foreign code: everything that touches the network is in `smtp.bend` and `net.c`.
+`bend PROOF.bend` prints ALL PROOFS CHECK only while every law in [`LAWS.bend`](LAWS.bend) holds. The laws are about `core.bend` and the other pure files, which the checker also guarantees call no foreign code: everything that touches the network is in `smtp.bend` and `net.c`. The proofs also pass `bend PROOF.bend --verdict`, which rechecks them with Bend's small kernel, itself proven in Lean.
 
 - **No injection, for every string.** A cleaned field holds no CR or LF (by induction), and every address, subject and header goes through it: none can start a new SMTP command or a new header line.
 - **The RFCs' own test vectors**, checked by computation: base64 (RFC 4648), MD5 (RFC 1321), CRAM-MD5 (RFC 2195), AUTH PLAIN (RFC 4616), XOAUTH2 (Google's example), OAUTHBEARER (RFC 7628), Punycode (RFC 3492), DKIM canonicalization (RFC 6376 3.4.5).

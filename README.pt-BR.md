@@ -77,7 +77,7 @@ Sem endereço com acento na parte local, a mensagem sai toda em 7 bits e não de
 - `addr.bend`: endereços, mailboxes com nome, leitura e escrita de listas
 - `sink.bend`: o servidor de teste (máquina de estados pura, com TLS e STARTTLS); `tests/server.py`: servidor de teste roteirizável (AUTH, recusas, injeção, SMTPUTF8)
 - `md5.bend`: MD5 e HMAC-MD5 (só para CRAM-MD5); `dkim.bend`: canonicalização e o campo DKIM-Signature
-- `LAWS.bend` / `PROOF.bend`: leis e provas
+- `LAWS.bend` / `PROOF.bend`: leis e provas (passam também no `bend PROOF.bend --verdict`, que reconfere com o núcleo do Bend verificado em Lean)
 - `tests/certs/`: CA, certificados de servidor e de cliente e chaves DKIM **só de teste** (chaves privadas inclusas de propósito)
 - `tests/socks.py` e `tests/httpproxy.py`: proxies de teste; `tests/dkim_verify.py`: verificador de DKIM
 
