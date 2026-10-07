@@ -34,9 +34,9 @@ Opções do `send`:
 
 Saída: 0 entregue a todos; 3 entregue em parte (um destinatário recusado, ou só algumas das mensagens); 1 nada enviado; 2 uso errado.
 
-No hub do Bend: `import 0x00e7af2de246c3a4c341d9ee49e68747/core.bend as C` e `import 0x00e7af2de246c3a4c341d9ee49e68747/smtp.bend as S`.
+No hub do Bend: `import 0x650cd729029c76d9f6151ee977dc0ae8/core.bend as C` e `import 0x650cd729029c76d9f6151ee977dc0ae8/smtp.bend as S`.
 
-O primeiro pacote publicado (`0xfd64aefe…`) continua no hub, que é permanente, e tem duas injeções na borda da biblioteca (opções de DSN e tipo de anexo); use o hash acima.
+O primeiro pacote publicado (`0xfd64aefe…`) continua no hub, que é permanente, e tem duas injeções na borda da biblioteca (opções de DSN e tipo de anexo); use o hash acima; ele também é o que compila no Bend 2.0.36, onde o registro de efeitos mudou (o anterior, `0x00e7af2d…`, só compila até o 2.0.35).
 
 Como biblioteca, o ponto de entrada é `Smtp.send_many(opts, mensagens)` em `smtp.bend`, com os tipos e construtores (`Opts.new`, `Mail.new`...) em `core.bend` (ou `Smtp.send_mail` para uma só): devolve um `Batch` com o resultado de cada mensagem, na ordem, e o erro que encerrou a conexão, se houve.
 

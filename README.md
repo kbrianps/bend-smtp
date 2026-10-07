@@ -6,8 +6,8 @@ An SMTP client written in [Bend 2](https://github.com/bendlang/bend): TLS, OAuth
 
 ```python
 import Base
-import 0x00e7af2de246c3a4c341d9ee49e68747/core.bend as C
-import 0x00e7af2de246c3a4c341d9ee49e68747/smtp.bend as S
+import 0x650cd729029c76d9f6151ee977dc0ae8/core.bend as C
+import 0x650cd729029c76d9f6151ee977dc0ae8/smtp.bend as S
 
 def main() -> IO(Unit):
   do IO<Unit>:
@@ -18,7 +18,7 @@ def main() -> IO(Unit):
     IO.print("done")
 ```
 
-Those two lines fetch the package from the Bend hub (or clone this repository and import `./core.bend` and `./smtp.bend`). A complete program is in [`examples/hello.bend`](examples/hello.bend). Hub packages are permanent, so the first one published (`0xfd64aefe…`) is still there: it lets a caller of the library inject a command through the DSN options, or a header through an attachment's type. Use the hash above. There is also a command line:
+Those two lines fetch the package from the Bend hub (or clone this repository and import `./core.bend` and `./smtp.bend`). A complete program is in [`examples/hello.bend`](examples/hello.bend). Hub packages are permanent, so the first one published (`0xfd64aefe…`) is still there: it lets a caller of the library inject a command through the DSN options, or a header through an attachment's type. Use the hash above; it is also the one built for Bend 2.0.36, where effects register differently (the hash before it, `0x00e7af2d…`, builds only up to 2.0.35). There is also a command line:
 
     bend send.bend -o send
     SMTP_PASSWORD=... ./send --host smtp.gmail.com --user me@gmail.com \
