@@ -305,7 +305,7 @@ Term net_connect_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_connect_use(void) {
 #ifdef CID(Net.connect)
-  io_eff(CID(Net.connect), net_connect_run, 0);
+  io_eff(CID(Net.connect), net_connect_run);
 #endif
 }
 
@@ -560,7 +560,7 @@ Term net_connect_via_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_connect_via_use(void) {
 #ifdef CID(Net.connect_via)
-  io_eff(CID(Net.connect_via), net_connect_via_run, 0);
+  io_eff(CID(Net.connect_via), net_connect_via_run);
 #endif
 }
 
@@ -681,7 +681,7 @@ Term net_tls_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_tls_use(void) {
 #ifdef CID(Net.tls)
-  io_eff(CID(Net.tls), net_tls_run, 0);
+  io_eff(CID(Net.tls), net_tls_run);
 #endif
 }
 
@@ -740,7 +740,7 @@ Term net_tls_accept_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_tls_accept_use(void) {
 #ifdef CID(Net.tls_accept)
-  io_eff(CID(Net.tls_accept), net_tls_accept_run, 0);
+  io_eff(CID(Net.tls_accept), net_tls_accept_run);
 #endif
 }
 
@@ -795,7 +795,7 @@ Term net_send_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_send_use(void) {
 #ifdef CID(Net.send)
-  io_eff(CID(Net.send), net_send_run, 0);
+  io_eff(CID(Net.send), net_send_run);
 #endif
 }
 
@@ -863,7 +863,7 @@ Term net_poll_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_poll_use(void) {
 #ifdef CID(Net.poll)
-  io_eff(CID(Net.poll), net_poll_run, 0);
+  io_eff(CID(Net.poll), net_poll_run);
 #endif
 }
 
@@ -884,7 +884,7 @@ Term net_close_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_close_use(void) {
 #ifdef CID(Net.close)
-  io_eff(CID(Net.close), net_close_run, 0);
+  io_eff(CID(Net.close), net_close_run);
 #endif
 }
 
@@ -898,7 +898,7 @@ Term net_time_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_time_use(void) {
 #ifdef CID(Net.time)
-  io_eff(CID(Net.time), net_time_run, 0);
+  io_eff(CID(Net.time), net_time_run);
 #endif
 }
 
@@ -914,7 +914,7 @@ Term net_hostname_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_hostname_use(void) {
 #ifdef CID(Net.hostname)
-  io_eff(CID(Net.hostname), net_hostname_run, 0);
+  io_eff(CID(Net.hostname), net_hostname_run);
 #endif
 }
 
@@ -946,7 +946,7 @@ Term net_helo_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_helo_use(void) {
 #ifdef CID(Net.helo)
-  io_eff(CID(Net.helo), net_helo_run, 0);
+  io_eff(CID(Net.helo), net_helo_run);
 #endif
 }
 
@@ -960,7 +960,7 @@ Term net_debug_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) net_debug_use(void) {
 #ifdef CID(Net.debug)
-  io_eff(CID(Net.debug), net_debug_run, 0);
+  io_eff(CID(Net.debug), net_debug_run);
 #endif
 }
 
@@ -1060,7 +1060,7 @@ Term dkim_sha256_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) dkim_sha256_use(void) {
 #ifdef CID(Dkim.sha256)
-  io_eff(CID(Dkim.sha256), dkim_sha256_run, 0);
+  io_eff(CID(Dkim.sha256), dkim_sha256_run);
 #endif
 }
 
@@ -1094,7 +1094,7 @@ Term dkim_alg_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) dkim_alg_use(void) {
 #ifdef CID(Dkim.alg)
-  io_eff(CID(Dkim.alg), dkim_alg_run, 0);
+  io_eff(CID(Dkim.alg), dkim_alg_run);
 #endif
 }
 
@@ -1147,6 +1147,6 @@ Term dkim_sign_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) dkim_sign_use(void) {
 #ifdef CID(Dkim.sign)
-  io_eff(CID(Dkim.sign), dkim_sign_run, 0);
+  io_eff(CID(Dkim.sign), dkim_sign_run);
 #endif
 }

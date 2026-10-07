@@ -50,7 +50,7 @@ Checked against real servers: authenticated sends through Gmail (STARTTLS and im
 
 ## Limits
 
-- **Bend 2.0.35**, native build only, tested on Linux. Bend's C side has no stable ABI between releases, so another version may need the effects in `net.c` adjusted. The network and TLS are C effects that open OpenSSL at run time (`libssl` 1.1 or 3 must be installed); under the JS backend they answer "not supported".
+- **Bend 2.0.36**, native build only, tested on Linux. Bend's C side has no stable ABI between releases, so another version may need the effects in `net.c` adjusted. The network and TLS are C effects that open OpenSSL at run time (`libssl` 1.1 or 3 must be installed); under the JS backend they answer "not supported".
 - **Memory**: a Bend string is a linked list, so an attachment costs about 55 bytes of RAM per byte (10 MB: about 1 s and 570 MB).
 - **OAuth**: it sends an access token you already have; it does not obtain or refresh one.
 - **IDNA**: a non-ASCII domain is converted as written (ASCII letters lower-cased), without Unicode normalization.
